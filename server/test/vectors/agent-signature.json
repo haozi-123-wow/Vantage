@@ -1,0 +1,39 @@
+{
+  "$comment": "Vantage Agent 上报签名共享测试向量。⛔ 不得用于生产（secret 是公开的测试值）。Agent(Go) 与核心(Node) 两端的测试都必须逐字节消费本文件——docs/api.md §2.1 与 docs/agent.md §6.2 都要求「实现都对但拼法不同」这类 401 必须被向量测试挡住。",
+  "algorithm": "HMAC-SHA256",
+  "canonical_template": "method + \"\\n\" + path + \"\\n\" + timestamp + \"\\n\" + nonce + \"\\n\" + sha256_hex(raw_body)",
+  "notes": [
+    "分隔符固定 LF(0x0A)，共 4 处，末尾不加换行（✅ 决策 #46）",
+    "raw_body 是 gzip 之前的原始 JSON 字节；⛔ 不得用 JSON.parse 后重新序列化的结果计算（✅ 决策 #35）",
+    "path 仅路径，不含 host 与 query",
+    "timestamp 是十进制 ASCII unix 毫秒，无前导零",
+    "signature 为十六进制小写"
+  ],
+  "secret": "vs_TEST_SECRET_DO_NOT_USE_0123456789abcdef",
+  "vectors": [
+    {
+      "name": "report-full-body",
+      "method": "POST",
+      "path": "/api/v1/agent/report",
+      "timestamp": 1758800000123,
+      "nonce": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "body_bytes": 312,
+      "raw_body": "{\"agent_id\":\"11111111-2222-3333-4444-555555555555\",\"batch_id\":\"01J000000000000000000000AA\",\"ts\":1758800000123,\"seq\":7,\"host\":{\"hostname\":\"node-a\",\"os\":\"linux\",\"kernel\":\"6.6.0\",\"boot_time\":1758790000,\"capabilities\":{\"disk.io\":true,\"gpu.nvidia\":false}},\"metrics\":{\"cpu.usage\":12.5,\"mem.used_pct\":41.2},\"probes\":[]}",
+      "body_sha256": "ad02e20f30c7c6bd4d397a41d7c8d125333065ec165b0936507f9cdfe76dcce8",
+      "canonical": "POST\n/api/v1/agent/report\n1758800000123\na1b2c3d4e5f60718293a4b5c6d7e8f90\nad02e20f30c7c6bd4d397a41d7c8d125333065ec165b0936507f9cdfe76dcce8",
+      "signature": "b68c75b7c92954abf646e209333656f36c27a57672488135e13d769fc6ac740f"
+    },
+    {
+      "name": "heartbeat-minimal-body",
+      "method": "POST",
+      "path": "/api/v1/agent/heartbeat",
+      "timestamp": 1758800060000,
+      "nonce": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "body_bytes": 118,
+      "raw_body": "{\"agent_id\":\"11111111-2222-3333-4444-555555555555\",\"batch_id\":\"01J000000000000000000000BB\",\"ts\":1758800060000,\"seq\":8}",
+      "body_sha256": "1ff079a4f2532cf40dcc071dec438a5cf8f6e7e43c6a6cc89253e1082b320c0a",
+      "canonical": "POST\n/api/v1/agent/heartbeat\n1758800060000\n0f1e2d3c4b5a69788796a5b4c3d2e1f0\n1ff079a4f2532cf40dcc071dec438a5cf8f6e7e43c6a6cc89253e1082b320c0a",
+      "signature": "52ca44afe85202ca9121415365bbd3328ac24bbd7bc7fa07cfbd3afe1e499e37"
+    }
+  ]
+}

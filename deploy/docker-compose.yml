@@ -1,0 +1,92 @@
+# =============================================================================
+# Vantage · 本地/单机部署的 PG + Redis（设计 §12.1）
+#
+# ⚠️ 本文件只为**把中心跑起来**：PG 用一个超级用户账号即可（省事），
+#    生产请按 server/scripts/init-db.sql 建最小权限角色（vantage_migrator / vantage_app / vantage_ro），
+#    因为 ✅ R13 要求「DDL 权限不挂在常规请求路径上」。
+#
+# 用法：
+#   cd deploy && docker compose up -d
+#   cd ../server && cp .env.example .env   # 填：
+#     DATABASE_URL=postgres://postgres:vantage_dev_pw@127.0.0.1:5432/vantage
+#     MIGRATOR_DATABASE_URL=（同上，开发环境可省略）
+#     REDIS_URL=redis://127.0.0.1:6379/0
+#   npm run migrate && npm start
+#
+# 端口只绑定在 127.0.0.1：数据库/缓存⛔ 不对公网暴露（设计 §13 安全清单）。
+# =============================================================================
+
+name: vantage
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vantage-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: vantage
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vantage_dev_pw}
+      # 服务端一律 UTC：所有 *_at / *_ts 都以中心接收时间为准（决策 #16）
+      TZ: UTC
+      PGTZ: UTC
+      POSTGRES_INITDB_ARGS: --encoding=UTF8
+    command:
+      - postgres
+      - -c
+      - timezone=UTC
+      - -c
+      - log_timezone=UTC
+      - -c
+      - wal_compression=on
+    ports:
+      - 127.0.0.1:5432:5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d vantage']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: vantage-redis
+    restart: unless-stopped
+    # ✅ R15：maxmemory-policy 必须 noeviction —— nonce/幂等键一旦被驱逐，
+    #    重放窗口会重新打开、批量幂等失效（数据重复入库）。
+    # ⛔ 不要为了"省内存"改成 allkeys-lru；内存吃紧时先清 ratelimit:* / snapshot:*（可重建）。
+    # 持久化关闭：Redis 数据本就可丢（会话丢失=重新登录，设计 §2）。
+    #
+    # 🔑 要不要给 Redis 设口令？
+    #   · 本文件把端口**只绑在 127.0.0.1**，不开 requirepass 也能跑（同机进程可见，属可信域）；
+    #   · 若 Redis 与 core 不在同一台机/同一网络命名空间，**必须**启用口令：把下面的
+    #     --requirepass 打开，然后在 server/.env 用分立变量给（口令无需编码）：
+    #         REDIS_URL=redis://127.0.0.1:6379/0
+    #         REDIS_PASSWORD=<同一口令>
+    #     ⛔ 不要写成 `--requirepass ${REDIS_PASSWORD}` 却忘了给 .env 赋值：空口令等于无口令。
+    #   · Redis 6+ 建议同时用 ACL（--user vantage on >口令 ~* +@all）替代默认用户口令。
+    command:
+      - redis-server
+      - --maxmemory-policy
+      - noeviction
+      - --appendonly
+      - 'no'
+      - --save
+      - ''
+      # - --requirepass
+      # - ${REDIS_PASSWORD:?必须先设置 REDIS_PASSWORD（否则会以空口令启动）}
+    ports:
+      - 127.0.0.1:6379:6379
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
+  redisdata:

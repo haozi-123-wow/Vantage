@@ -1,0 +1,83 @@
+/**
+ * Vantage · 限流中间件（Agent 维度固定窗口）
+ *
+ * 依据：docs/api.md §1.4（Agent 上报 60 次/分钟，429 + `Retry-After`；响应头建议）、
+ *       docs/database.md §7（`ratelimit:agent:<agent_id>`，窗口期 TTL）、决策 #23
+ *
+ * 🔑 为什么固定窗口的**清零与过期必须写在 Lua 里**（这段代码只有 4 行，但两种朴素写法都错）
+ *
+ *  写法 A：`INCR` 后**每次**都 `EXPIRE(key, 60)`
+ *    → TTL 被不断续期，key 永远不过期。一个稳定按 59 次/分钟上报的 Agent 会
+ *      在第 61 次撞上 429，并且**此后永久 429**（计数器再也回不到 0）。这是最坏的一种 bug：
+ *      它只在"合法速率"下才出现，压测和短测都看不出来。
+ *
+ *  写法 B：`INCR`，`n === 1` 时才 `EXPIRE`
+ *    → 语义正确，但两步非原子：INCR 成功后进程崩溃/连接断开，key 会留下**没有 TTL 的计数器**，
+ *      同样造成永久 429。
+ *
+ *  Lua 脚本在 Redis 内单线程原子执行，一次往返同时拿到「计数」与「剩余 TTL」，
+ *  两个问题都不存在。
+ *
+ * ⚠️ 窗口是**固定窗口**（非滑动/令牌桶），边界处允许最多 2× 的瞬时突发。
+ *    对 15s 周期的上报流完全够用；真要精确到"任意 60s 内 ≤ 60 次"需要滑动窗口（Redis 侧成本更高），
+ *    收益与成本不匹配（§1.4 的阈值本身就是 2–3 倍余量的粗粒度保护）。
+ */
+
+import { AppError } from '../utils/errors.js';
+import { keys } from '../utils/redisKeys.js';
+
+/** 窗口长度（秒）：§1.4 的建议阈值以「每分钟」表述，故窗口固定 60s */
+export const AGENT_RATE_WINDOW_S = 60;
+
+/** 原子「计数 + 首次设 TTL」，返回 [当前计数, 剩余秒数] */
+const FIXED_WINDOW_LUA = `
+local n = redis.call('INCR', KEYS[1])
+if n == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return { n, redis.call('TTL', KEYS[1]) }
+`;
+
+/**
+ * 创建 Agent 限流的 preHandler。
+ *
+ * ⚠️ 上报与心跳**共用同一个桶**（✅ §2.2：心跳不单独设桶）——
+ *    否则心跳可以被用来绕过上报限流，两倍的写入压力会绕过这一层防护。
+ *
+ * @param {{ redis: import('ioredis').Redis, config: object, logger: object }} deps
+ */
+export function createAgentRateLimiter({ redis, config, logger }) {
+  const limit = config.rateLimit.agentPerMinute;
+
+  return async function agentRateLimit(request, reply) {
+    const key = keys.rateLimitAgent(request.agent.id);
+
+    let count;
+    let ttl;
+    try {
+      // ioredis 会把 Lua 的 table 映射成扁平数组 [count, ttl]
+      [count, ttl] = await redis.eval(FIXED_WINDOW_LUA, 1, key, AGENT_RATE_WINDOW_S);
+    } catch (err) {
+      // 限流失效时**拒绝服务**而不是放行：Redis 是限流/nonce/幂等的共同依赖，
+      // 它挂了却继续收数据，等于在没有防护的状态下写库（与 §6.1 的取舍一致）。
+      logger?.error({ err, agentId: request.agent.id }, '限流检查失败（Redis 不可用）');
+      throw new AppError('upstream_unavailable', { cause: err, details: { dependency: 'redis' } });
+    }
+
+    const remaining = Math.max(0, limit - count);
+    const retryAfterS = Math.max(1, Number(ttl) || AGENT_RATE_WINDOW_S);
+    reply.header('X-RateLimit-Limit', String(limit));
+    reply.header('X-RateLimit-Remaining', String(remaining));
+    // 约定：Reset = 窗口重置的 Unix **epoch 秒**；Retry-After = 还需等待的**秒数**
+    reply.header('X-RateLimit-Reset', String(Math.floor(Date.now() / 1000) + retryAfterS));
+
+    if (count > limit) {
+      logger?.warn({ agentId: request.agent.id, count, limit }, 'Agent 上报被限流');
+      throw new AppError('rate_limited', {
+        message: `上报过于频繁（上限 ${limit} 次 / ${AGENT_RATE_WINDOW_S}s）`,
+        retryAfterS,
+        details: { limit, window_s: AGENT_RATE_WINDOW_S, count },
+      });
+    }
+  };
+}
