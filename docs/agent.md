@@ -5,6 +5,7 @@
 > **文档性质**：行为契约（采集 / 探活 / 上报 / 鉴权 / 配置 / 资源 / 运维），**不含实现代码**。
 > **上位文档**：`Vantage-DESIGN-v0.7.md`（**文件内容已是 v0.8**，文件名保留以维持引用；§2.1、§4、§6、§12 为主）；上报字段以 `docs/api.md` §2 为准，指标与单位以 `docs/database.md` §5.7.2 为准。
 > **阅读约定**：本文中的「✅ 本轮决策 / 本轮已定」= 2026-09-26 Owner 拍板，**均已写入设计文档 v0.8**；逐条对照见 `docs/design-deltas.md`。
+> **进度与待办**：现在做到哪了见 [`docs/agent-status.md`](agent-status.md)，还差什么见 [`docs/agent-todo.md`](agent-todo.md)；口径冲突时以本文为准。
 
 **标注图例**
 
@@ -38,15 +39,19 @@
 
 | 模块 | 职责 | 关键点 |
 |---|---|---|
-| `cmd/agent/main.go` | 启动、信号处理、优雅退出 | 监听 `SIGHUP`（§9） |
+| `cmd/agent/main.go` | 启动、信号处理、优雅退出 | 监听 `SIGHUP`（§9）；`--check` 只校验配置与凭证、`--once` 单次采集上报（联调用） |
 | `internal/config/` | 读取、校验 `config.yaml` | 校验失败**保留旧配置**（✅ 决策 #34）；校验规则见 §8 |
-| `internal/collector/` | 采集器统一接口（gopsutil 为主） | `cpu` `mem` `disk` `net` `gpu` `process`（`docker` 预留，✅ §4.2） |
+| `internal/collector/` | 采集器统一接口 | `cpu` `mem` `disk` `net` `gpu` `process`（`docker` 预留，✅ §4.2）；⚠️ 实现为 **Linux 直读 `/proc`**（零第三方采集依赖，非 gopsutil —— §3 表中的 gopsutil 数据源为早期口径，收窄见待办 A-T25） |
 | `internal/prober/` | 本地探活 `ping` / `http` / `tcp` | 目标来自本机配置，结果上报（✅ §4.6） |
 | `internal/scheduler/` | 采集与探活调度 | 不同任务不同频率，事件驱动 sleep（✅ §4.5） |
-| `internal/reporter/` | 组包 / gzip / 签名 / 上报 / 重试 | 只序列化一次（✅ 决策 #35） |
+| `internal/reporter/` | 组包 / gzip / 签名 / 上报 / **内存重试** | 只序列化一次（✅ 决策 #35）；重试**内联于本包**（仅当前批次，⛔ 不落盘，✅ 决策 #14） |
 | `internal/auth/` | 加载本机 key/secret，生成 HMAC 签名 | key **不经命令行**（✅ 决策 #37） |
-| `internal/retry/` | 内存级重试（仅当前批次） | ⛔ **不做跨断网的持久化补传**（✅ 决策 #14） |
-| ~~`internal/buffer/`~~ | ✅ **已定（本轮）：删除该模块** | 设计 §11.2 列的「离线环形缓存（有上限）」与决策 #14/§4.7「不缓存不补传、磁盘占用 ≈ 0」冲突 → 删除；重试只由 `internal/retry/` 在内存中完成 |
+| ~~`internal/retry/`~~ | ~~内存级重试（仅当前批次）~~ | ⛔ **实际无此包**：重试逻辑内联在 `internal/reporter/`（约 `send` 一段），只重试当前批次、⛔ 不做跨断网的持久化补传（✅ 决策 #14）——早期设计列了独立包，落地时并入 reporter |
+| ~~`internal/buffer/`~~ | ✅ **已定（本轮）：删除该模块** | 设计 §11.2 列的「离线环形缓存（有上限）」与决策 #14/§4.7「不缓存不补传、磁盘占用 ≈ 0」冲突 → 删除；重试只在 `internal/reporter/` 内存中完成 |
+| `internal/metric/` | 指标全名拼接与维度转义 | 消费 `contracts/metric-names.json`，与中心同源测试向量（§3 命名硬契约） |
+| `internal/model/` | 上报体 / 心跳结构与本地校验 | 消费 `contracts/wire/*.json` 黄金报文 |
+| `internal/ulid/` | `batch_id`（幂等键）生成 | 单调、同毫秒不重复（§5.2） |
+| `internal/logging/` | slog 日志（text/json、文件轮转） | ⛔ 日志不得出现 key/secret（§12.3） |
 | `internal/version/` | 版本号，进 `User-Agent` 与日志 | 便于排障 |
 
 ---

@@ -7,7 +7,7 @@
 |---|---|
 | 设计 | **v0.8 定稿**（§15 技术决策表共 59 条）→ [`Vantage-DESIGN-v0.7.md`](Vantage-DESIGN-v0.7.md)（⚠️ 文件名保留 `v0.7` 以维持既有引用，**内容已是 v0.8**） |
 | 代码 | **中心 M1 + M1.5 已落地**：`server/` 可跑通「Agent 上报 → gzip 解压 → HMAC 验签 → 幂等 → 单事务落库 → 分区/降采样/保留期清理」 |
-| 代码 | 🚧 **Go Agent 进行中**：签名 / 指标命名 / 报文结构已完成，并与中心跑通**跨语言契约测试**（`contracts/`）；采集器、配置、调度、探活待完成 |
+| 代码 | 🚧 **Go Agent 主体完成**：采集/探活/签名/上报/配置/热重载 M1–M4 核心代码已落地，`go test ./...` 全绿，并与中心跑通**跨语言契约测试**（`contracts/`）；M2 部署侧（安装脚本、systemd）待补，进度见 [`docs/agent-status.md`](docs/agent-status.md) |
 | 未开工 | Vue 面板（`web/`）——目录尚未创建，契约已定稿：`docs/frontend.md` |
 | 许可 | **AGPL-3.0**（决策 #28；⚠️ 仓库尚未放入 `LICENSE` 文件，正式开源前需补） |
 
@@ -47,7 +47,7 @@
 
 | 组件 | 名称 | 技术选型 | 状态 |
 |---|---|---|---|
-| 被监控端 | `vantage-agent` | **Go 1.22+** 单文件静态二进制，极低占用、**非 root 可运行** | 未开工 |
+| 被监控端 | `vantage-agent` | **Go 1.22+** 单文件静态二进制，极低占用、**非 root 可运行** | 🚧 M1–M4 代码完成（部署脚本待补，见 `docs/agent-status.md`） |
 | 中心服务 | `vantage-core` | **Node.js ≥ 22 + Fastify 5** | ✅ M1 / M1.5 |
 | Web 面板 | Vantage Console | **Vue 3 + ECharts + Element Plus**（按需引入） | 未开工 |
 | 主存储 | PostgreSQL | **16**（原始时序层按天分区） | ✅ 8 个迁移 |
@@ -73,7 +73,7 @@ Vantage/
 ├── server/                      # ✅ vantage-core（Node.js）：见 server/README.md
 ├── deploy/
 │   └── docker-compose.yml       # 本地/单机 PG 16 + Redis 7（端口只绑 127.0.0.1）
-├── agent/                       # 🚧 Go Agent（进行中）
+├── agent/                       # 🚧 vantage-agent（Go，M1–M4 代码完成；部署脚本待补）
 └── web/                         # ⏳ Vantage Console（未创建）
 ```
 
@@ -124,7 +124,7 @@ curl -s http://127.0.0.1:8787/readyz     # {"ok":true,...}
 
 ### 3.2 联调：发一套 Agent 凭证并上报一次
 
-Go Agent 尚未开工，M1 阶段用脚本 + 手工报文联调：
+中心侧用脚本发凭证；Agent 已有 `--check`（只校验配置与凭证）与 `--once --print-body`（采集上报一次并打印报文，⛔ 不含凭证）两个联调入口，真机上可直接验证链路：
 
 ```bash
 cd server
@@ -171,6 +171,8 @@ VANTAGE_LIVE_TEST=1 npm test
 | 表结构 / Redis 键空间 / 分区与保留期 | [`docs/database.md`](docs/database.md) |
 | 上报协议 / 面板 API / WS / 错误码 | [`docs/api.md`](docs/api.md) |
 | Agent 采集 / 探活 / 配置 / 安装脚本 | [`docs/agent.md`](docs/agent.md) |
+| **Agent 现在做到哪了（进度快照）** | [`docs/agent-status.md`](docs/agent-status.md) |
+| **Agent 还差什么（待办清单）** | [`docs/agent-todo.md`](docs/agent-todo.md) |
 | 面板页面 / 数据层 / 性能预算 | [`docs/frontend.md`](docs/frontend.md) |
 | v0.7→v0.8 改了什么、M1/M1.5 实现记录 | [`docs/design-deltas.md`](docs/design-deltas.md) |
 | 中心服务怎么跑、踩过哪些坑 | [`server/README.md`](server/README.md) |
@@ -191,9 +193,9 @@ VANTAGE_LIVE_TEST=1 npm test
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| M1 | Agent 采 6 类指标 + 中心收/存 + 免登录公开状态页 | 中心侧 ✅（上报/存/清理已跑通；Agent 与公开页待做） |
+| M1 | Agent 采 6 类指标 + 中心收/存 + 免登录公开状态页 | 中心侧 ✅；Agent 侧采集/组包/上报 ✅（公开页待做） |
 | M1.5 | 分区维护 / 降采样 1m·5m / 保留期清理 / 单实例锁 | ✅ 提前落地（分区提前量有硬死线） |
-| M2 | 鉴权（key+HMAC）+ TLS + schema/限流 + 面板登录 + 公开 API + Agent 安装脚本 | ⏳ |
+| M2 | 鉴权（key+HMAC）+ TLS + schema/限流 + 面板登录 + 公开 API + Agent 安装脚本 | ⏳（Agent 侧鉴权/TLS 代码 ✅；安装脚本、systemd、面板登录未开工） |
 | M3 | 告警引擎（阈值/离线/IP 变化/探活）+ 多通道通知 + WS | ⏳ |
 | M4 | 探活面板 + GPU/进程完善 + 历史面板 + 2FA/RBAC | ⏳ |
 | M5 | Docker 监控、非 root 加固打磨、扩展项 | ⏳ |
@@ -202,4 +204,4 @@ VANTAGE_LIVE_TEST=1 npm test
 ## 8. 许可
 
 **AGPL-3.0**（强 copyleft，适配网络服务形态）。⚠️ 仓库尚未放入 `LICENSE` 文件，正式开源前需补齐。
-依赖许可干净：`gopsutil`(BSD)、Vue / Fastify / ECharts / Element Plus（宽松）、PostgreSQL / Redis（各自宽松）。
+依赖许可干净：Vue / Fastify / ECharts / Element Plus（宽松）、Go 侧仅 `gopkg.in/yaml.v3`（Apache-2.0，ICMP 走裸 syscall 不引第三方）、PostgreSQL / Redis（各自宽松）。
