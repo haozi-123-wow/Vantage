@@ -244,6 +244,10 @@ export const KNOWN_BASE_METRICS = Object.freeze({
   'gpu.temp': { unit: '℃', dims: ['index'] },
   'gpu.power': { unit: 'W', dims: ['index'] },
   'process.count': { unit: '个', dims: [] },
+  // ✅ G10：Agent 自监控最小集（docs/agent.md §10）
+  'agent.mem_rss': { unit: 'bytes', dims: [] },
+  'agent.report_failures': { unit: '个', dims: [] },
+  'agent.reload_ok': { unit: '', dims: [] }, // 1=最近一次 SIGHUP 成功，0=失败
 });
 
 /** 基名是否在文档登记清单内 */

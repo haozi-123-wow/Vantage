@@ -6,8 +6,9 @@
 | 项 | 现状 |
 |---|---|
 | 设计 | **v0.8 定稿**（§15 技术决策表共 59 条）→ [`Vantage-DESIGN-v0.7.md`](Vantage-DESIGN-v0.7.md)（⚠️ 文件名保留 `v0.7` 以维持既有引用，**内容已是 v0.8**） |
-| 代码 | **M1 + M1.5 已落地**：`server/` 可跑通「Agent 上报 → gzip 解压 → HMAC 验签 → 幂等 → 单事务落库 → 分区/降采样/保留期清理」 |
-| 未开工 | Go Agent（`agent/`）、Vue 面板（`web/`）——目录尚未创建，契约已定稿：`docs/agent.md`、`docs/frontend.md` |
+| 代码 | **中心 M1 + M1.5 已落地**：`server/` 可跑通「Agent 上报 → gzip 解压 → HMAC 验签 → 幂等 → 单事务落库 → 分区/降采样/保留期清理」 |
+| 代码 | 🚧 **Go Agent 进行中**：签名 / 指标命名 / 报文结构已完成，并与中心跑通**跨语言契约测试**（`contracts/`）；采集器、配置、调度、探活待完成 |
+| 未开工 | Vue 面板（`web/`）——目录尚未创建，契约已定稿：`docs/frontend.md` |
 | 许可 | **AGPL-3.0**（决策 #28；⚠️ 仓库尚未放入 `LICENSE` 文件，正式开源前需补） |
 
 ---
@@ -68,14 +69,21 @@ Vantage/
 │   ├── agent.md                 #   采集 / 探活 / 上报 / 配置 / 安装脚本
 │   ├── frontend.md              #   Vantage Console 页面与数据层
 │   └── design-deltas.md         #   v0.7→v0.8 逐条修订 + 实现期记录（D-01…D-12、R1…R19）
+├── contracts/                   # ⛔ 两端共享的**接口契约**：签名/命名向量 + 线上黄金字节（见其 README）
 ├── server/                      # ✅ vantage-core（Node.js）：见 server/README.md
 ├── deploy/
 │   └── docker-compose.yml       # 本地/单机 PG 16 + Redis 7（端口只绑 127.0.0.1）
-├── agent/                       # ⏳ Go Agent（未创建）
+├── agent/                       # 🚧 Go Agent（进行中）
 └── web/                         # ⏳ Vantage Console（未创建）
 ```
 
 > ⛔ `server/src/` 内不得出现任何向 Agent 下发配置/命令的代码路径；该约束并入安全清单复核。
+>
+> ⛔ `server/test/` 与 `agent/` 下的测试**都会随仓库上传**，因此 ⛔ 测试里只能出现文档用的保留地址
+> （`203.0.113.x`、`example.com`、`127.0.0.1`）与明显是假的凭证；⚠️ 真实地址/账号/IEC 一律不进测试文件。
+>
+> 两端共享的**接口契约**（签名与命名向量、线上黄金字节）单独放在 `contracts/` —— 它们是接口定义
+> 而不是测试代码，两侧测试都读同一份文件，规则见 [`contracts/README.md`](contracts/README.md)。
 
 ## 3. 本机开发（先把中心跑起来）
 
@@ -142,7 +150,7 @@ VANTAGE_LIVE_TEST=1 npm test
 |---|---|---|
 | 单向宗旨 | 中心零下发路径；上报响应恒为 `{ok, server_ts}` | 设计 §2.1、决策 #12 |
 | 签名顺序 | 先 gzip 解压 → 取**原始 JSON 字节**验 HMAC → **再** `JSON.parse` → schema；解压前判 1MB / 解压输出上限 4MB（防 zip bomb） | 决策 #19/#35/#47、设计 §6.6 |
-| canonical 拼法 | `method\npath\ntimestamp\nnonce\nsha256_hex(raw_body)`，固定 LF、末尾不加换行、`path` 不含 query；两端共用 `server/test/vectors/agent-signature.json` | 决策 #46 |
+| canonical 拼法 | `method\npath\ntimestamp\nnonce\nsha256_hex(raw_body)`，固定 LF、末尾不加换行、`path` 不含 query；两端共用 `contracts/agent-signature.json` | 决策 #46 |
 | nonce 与幂等 | nonce TTL **600s ≥ 签名窗口**；`batch_id`(ULID) 幂等 TTL 10min；失败时**同时**释放 batch 与 nonce 占位（只删一个会让重试陷入 409 死循环） | 决策 #18/#36 |
 | 指标命名 | 维度写进**序列全名**（`disk.used_pct{mount=/data}`），主键 `(agent_id, metric, ts)` 不变，`labels` 只是反解副本；转义必须单射（`%` 也要转义） | 决策 #40、设计 §9.1 |
 | 时间权威 | 存储/排序一律以 **`server_ts`** 为准；`agent_ts` 仅用于漂移检测（>60s 告警） | 决策 #16/#17 |

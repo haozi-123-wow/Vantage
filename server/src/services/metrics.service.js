@@ -160,6 +160,17 @@ export function flattenMetrics(metrics) {
   // ⚠️ 只有**总数**进时序；Top-N 明细落 process_snapshots（见 storeProcessSnapshot）
   if (metrics.process) add('process.count', metrics.process.count);
 
+  // --- Agent 自监控（✅ G10）--------------------------------------------------
+  // 用途是尽早发现「监控系统自身把机器压垮」或配置反复重载失败。
+  if (metrics.agent) {
+    add('agent.mem_rss', metrics.agent.mem_rss);
+    add('agent.report_failures', metrics.agent.report_failures);
+    // 布尔 → 1/0：时序值只能是数字；undefined 时 add() 会跳过，不会凭空造一个点
+    if (metrics.agent.reload_ok !== undefined) {
+      add('agent.reload_ok', metrics.agent.reload_ok ? 1 : 0);
+    }
+  }
+
   return series;
 }
 

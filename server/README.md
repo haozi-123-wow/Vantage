@@ -113,14 +113,20 @@ npm run test:isolated # 每个测试文件一个子进程（CI / Linux 推荐，
 |---|---|
 | `test/schema.test.js` | **把 8 个迁移跑在真 PostgreSQL 上**（PGlite/WASM），逐条验证表结构、分区、约束、触发器、外键、权限、保留期删除语句 |
 | `test/migrations.test.js` | 迁移文件的静态契约：命名/顺序/表清单/禁止语句/关键决策落地痕迹 |
-| `test/sign.test.js` + `test/vectors/` | 上报签名规范与**共享测试向量**（Go Agent 必须消费同一份 JSON） |
+| `test/sign.test.js` | 上报签名规范，消费**共享测试向量** `contracts/agent-signature.json`（Go Agent 消费同一份 JSON） |
+| `test/agentwire.test.js` | **跨语言契约**：把 Go Agent 产出的**线上黄金字节**（`contracts/wire/*.json`）送进真实链路（gzip → 签名 → schema → 摊平 → 落库），钉死「Agent 以为的字段」与「中心要求的字段」是同一套 |
 | `test/report.test.js` | **上报链路全量行为**：docs/api.md §6.1 的十条验收用例 + 限流 + 审计 + 事务失败重试（全部用替身，离线可跑） |
 | `test/{flatten,ingest,ip,metric,crypto,errors,config,redis,app}.test.js` | 指标展平与派生、批次生命周期与 SQL 形状、IP 规范化、密码学、错误模型、配置校验、键空间契约、HTTP 冒烟 |
 | `test/report.live.test.js` | **真机联调**（默认跳过）：真实 PG+Redis 上的落库/分区/幂等/Lua 限流/审计，自动清理测试数据 |
 | `test/cron.test.js` | **定时任务（真 SQL）**：聚合语义与桶对齐、迟到数据自愈、分批清理、分区建/删的 3 条防误删规则、**删分区的逐分区门禁**；调度层用替身验单实例锁/fail-open/失败不崩 |
 | `test/cron.live.test.js` | **定时任务真机联调**（默认跳过）：真实分区 DDL、真实 Redis 分布式锁、真库聚合与门禁 |
 
-> `test/vectors/agent-signature.json` 是**两端共享**的签名向量：⛔ 不要只改一侧。
+> ⚠️ `server/test/` **会随仓库上传**（公开仓库）：测试里只能出现文档用的保留地址
+> （`203.0.113.x`、`127.0.0.1`、`example.com`）与明显是假的凭证，⛔ 真实地址/账号/口令一律不写进去。
+> 需要真实环境的是 `*.live.test.js`，它们一律从**环境变量**读连接信息（`VANTAGE_LIVE_TEST=1` 才跑）。
+>
+> 两端共享的**契约文件**放在仓库根目录 `contracts/`（见 `contracts/README.md`）：
+> ⛔ 不要只改一侧 —— 另一侧的测试会立刻红，这正是设计意图。
 
 ## 4. M1 上报链路：实现要点与坑（改代码前必读）
 

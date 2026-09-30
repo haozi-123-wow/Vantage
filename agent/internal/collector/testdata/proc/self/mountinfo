@@ -1,0 +1,9 @@
+25 0 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+30 25 259:2 / /data rw,relatime - xfs /dev/nvme0n1p2 rw
+35 25 0:24 / /run rw,nosuid,nodev - tmpfs tmpfs rw,size=1638400k
+40 25 0:30 / /var/lib/docker/overlay2/2f1c9a/merged rw,relatime - overlay overlay rw,lowerdir=/var/lib/docker/overlay2/l/ABCD
+45 25 253:0 / /srv/vgdata rw,relatime - xfs /dev/mapper/vg-data rw
+50 25 8:33 / /mnt/legacy rw,relatime - ext4 /dev/sdc1 rw
+55 25 8:49 / /mnt/with\040space rw,relatime - ext4 /dev/sdd1 rw
+60 25 8:1 /data /srv/bind rw,relatime - ext4 /dev/sda1 rw
+65 25 259:2 / /data rw,relatime - xfs /dev/nvme0n1p2 rw

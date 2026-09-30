@@ -7,6 +7,11 @@ yarn-error.log*
 # 沙箱内 npm 需要把 cache 放工作区里（见 README「本机开发」），别提交
 .npm-cache/
 
+# 同理：Go 的 GOPATH / GOCACHE / 模块缓存默认在工作区外，沙箱会拒写，故改成放工作区内
+.gocache/
+.gopath/
+.gomodcache/
+
 # --- 密钥与环境 -------------------------------------------------------------
 # ⛔ 绝不提交：含 SECRET_KEY 与数据库口令
 .env
@@ -21,5 +26,3 @@ tmp/
 .cache/
 _dump/
 *.pid
-# 测试环境
-server/test/

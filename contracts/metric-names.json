@@ -1,0 +1,55 @@
+{
+  "$comment": "Vantage 指标序列命名的共享测试向量（docs/database.md §5.7.2 要求「两端同源实现 + 共用测试向量」）。Agent(Go) 的 internal/metric 与核心(Node)的 utils/metric.js 必须逐字节消费本文件：拼法不一致的后果是中心 400，或者更糟——同一挂载点在库里变成两条曲线而且不报错。",
+  "spec": "docs/database.md §5.7.2",
+  "rules": [
+    "多维度按键名字母序升序拼接，`,` 分隔、无空格，`=` 连接键值",
+    "必须百分号编码（大写十六进制）：% { } = , 及空白；`%` 必须一起转义，否则编码不是单射",
+    "免转义保留原样：A-Z a-z 0-9 _ / : - . @ +",
+    "无维度不带花括号",
+    "全名长度 ≤ 200 字符"
+  ],
+  "labelValueForms": {
+    "string": "直接作为维度值",
+    "repeat": "{ \"repeat\": \"<字符>\", \"count\": <n> } → 该字符重复 n 次（用于精确构造长度边界，避免手写长串数错）"
+  },
+  "expectations": {
+    "full": "期望的序列全名（逐字节比较）",
+    "expectFullLength": "期望的全名长度（不写 full 时用，用于长度边界）"
+  },
+  "cases": [
+    { "name": "no-dims", "base": "cpu.usage", "labels": {}, "full": "cpu.usage" },
+    { "name": "no-dims-second", "base": "mem.used_pct", "labels": {}, "full": "mem.used_pct" },
+    { "name": "single-dim-mount-root", "base": "disk.used_pct", "labels": { "mount": "/" }, "full": "disk.used_pct{mount=/}" },
+    { "name": "two-dims-sorted-alphabetically", "base": "disk.used_pct", "labels": { "mount": "/data", "device": "sda1" }, "full": "disk.used_pct{device=sda1,mount=/data}" },
+    { "name": "two-dims-already-sorted", "base": "disk.used_pct", "labels": { "device": "sda1", "mount": "/data" }, "full": "disk.used_pct{device=sda1,mount=/data}" },
+    { "name": "net-device", "base": "net.rx_bps", "labels": { "device": "eth0" }, "full": "net.rx_bps{device=eth0}" },
+    { "name": "gpu-index", "base": "gpu.util", "labels": { "index": "0" }, "full": "gpu.util{index=0}" },
+    { "name": "cpu-core", "base": "cpu.core.usage", "labels": { "core": "3" }, "full": "cpu.core.usage{core=3}" },
+    { "name": "keep-case-of-value", "base": "net.rx_bps", "labels": { "device": "Eth0" }, "full": "net.rx_bps{device=Eth0}" },
+    { "name": "escape-space", "base": "disk.used_pct", "labels": { "mount": "/media/My Disk" }, "full": "disk.used_pct{mount=/media/My%20Disk}" },
+    { "name": "escape-comma", "base": "disk.used_pct", "labels": { "mount": "/a,b" }, "full": "disk.used_pct{mount=/a%2Cb}" },
+    { "name": "escape-equals", "base": "disk.used_pct", "labels": { "mount": "/a=b" }, "full": "disk.used_pct{mount=/a%3Db}" },
+    { "name": "escape-braces", "base": "disk.used_pct", "labels": { "mount": "/{x}" }, "full": "disk.used_pct{mount=/%7Bx%7D}" },
+    { "name": "escape-percent-is-injective-1", "base": "disk.used_pct", "labels": { "mount": "%20" }, "full": "disk.used_pct{mount=%2520}" },
+    { "name": "escape-percent-is-injective-2", "base": "disk.used_pct", "labels": { "mount": " " }, "full": "disk.used_pct{mount=%20}" },
+    { "name": "escape-tab", "base": "disk.used_pct", "labels": { "mount": "/a\tb" }, "full": "disk.used_pct{mount=/a%09b}" },
+    { "name": "escape-utf8-multibyte", "base": "disk.used_pct", "labels": { "mount": "/数据" }, "full": "disk.used_pct{mount=/%E6%95%B0%E6%8D%AE}" },
+    { "name": "keep-at-plus", "base": "disk.used_pct", "labels": { "mount": "/a@b+c" }, "full": "disk.used_pct{mount=/a@b+c}" },
+    { "name": "keep-colon-dot-dash", "base": "net.rx_bps", "labels": { "device": "br-1a:2b.3" }, "full": "net.rx_bps{device=br-1a:2b.3}" },
+    { "name": "length-exactly-200", "base": "disk.used_pct", "labels": { "mount": { "repeat": "a", "count": 179 } }, "expectFullLength": 200 }
+  ],
+  "invalid": [
+    { "name": "empty-base", "base": "", "labels": {} },
+    { "name": "base-not-lowercase", "base": "CPU.usage", "labels": {} },
+    { "name": "base-with-dims-inline", "base": "disk.used_pct{mount=/}", "labels": {} },
+    { "name": "base-trailing-dot", "base": "disk.", "labels": {} },
+    { "name": "base-leading-digit", "base": "1cpu.usage", "labels": {} },
+    { "name": "base-with-space", "base": "disk.used pct", "labels": {} },
+    { "name": "label-key-uppercase", "base": "net.rx_bps", "labels": { "Device": "eth0" } },
+    { "name": "label-key-dash", "base": "net.rx_bps", "labels": { "dev-ice": "eth0" } },
+    { "name": "label-key-reserved-base", "base": "net.rx_bps", "labels": { "base": "eth0" } },
+    { "name": "label-key-empty", "base": "net.rx_bps", "labels": { "": "eth0" } },
+    { "name": "label-value-empty", "base": "disk.used_pct", "labels": { "mount": "" } },
+    { "name": "name-too-long", "base": "disk.used_pct", "labels": { "mount": { "repeat": "a", "count": 180 } } }
+  ]
+}

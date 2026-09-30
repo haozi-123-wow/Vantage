@@ -80,14 +80,9 @@ const HOST_SCHEMA = {
     os: { type: 'string', minLength: 1, maxLength: REPORT_LIMITS.osMax },
     kernel: { type: 'string', minLength: 1, maxLength: REPORT_LIMITS.osMax },
     arch: { type: 'string', minLength: 1, maxLength: REPORT_LIMITS.archMax },
-    // ➕ boot_time 的口径（秒 / 毫秒 / RFC3339）设计未钉死：这里两者都收，原样落 JSONB，
-    //    待 Agent 实现定型后再收窄（见 server/README.md 开放项 M-5）。
-    boot_time: {
-      oneOf: [
-        { type: 'integer', minimum: 0 },
-        { type: 'string', minLength: 1, maxLength: 64 },
-      ],
-    },
+    // ✅ M-5 已收窄：Agent 实现定型为「整数 unix **秒**」，这里锁死为整数。
+    //    原先两种口径都收是等 Agent 定型；混口径不会报错，只会让「运行时长」在面板上差 1000 倍。
+    boot_time: { type: 'integer', minimum: 0, maximum: 4102444800 }, // ≤ 2100-01-01（秒）
     capabilities: CAPABILITIES_SCHEMA,
   },
 };
@@ -212,6 +207,18 @@ const METRICS_SCHEMA = {
       properties: {
         count: count,
         top: { type: 'array', maxItems: REPORT_LIMITS.processTopMax, items: PROCESS_TOP_ITEM },
+      },
+    },
+    // ✅ G10：Agent 自监控最小集（docs/agent.md §10）。
+    //    落库指标名：agent.mem_rss / agent.report_failures / agent.reload_ok。
+    //    `reload_ok` 线上是布尔（语义清晰），中心摊平时转成 1/0 —— 时序值只能是数字。
+    agent: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        mem_rss: nonNeg(),
+        report_failures: count,
+        reload_ok: { type: 'boolean' },
       },
     },
     // ✅ 本期固定 null（预留位，§4.2）。用 `type: 'null'` 而不是省略字段，
