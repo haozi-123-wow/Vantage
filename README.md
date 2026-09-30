@@ -173,6 +173,7 @@ VANTAGE_LIVE_TEST=1 npm test
 | Agent 采集 / 探活 / 配置 / 安装脚本 | [`docs/agent.md`](docs/agent.md) |
 | **Agent 现在做到哪了（进度快照）** | [`docs/agent-status.md`](docs/agent-status.md) |
 | **Agent 还差什么（待办清单）** | [`docs/agent-todo.md`](docs/agent-todo.md) |
+| **Agent 测试怎么跑（本机/真机/契约）** | [`docs/agent-testing.md`](docs/agent-testing.md) |
 | 面板页面 / 数据层 / 性能预算 | [`docs/frontend.md`](docs/frontend.md) |
 | v0.7→v0.8 改了什么、M1/M1.5 实现记录 | [`docs/design-deltas.md`](docs/design-deltas.md) |
 | 中心服务怎么跑、踩过哪些坑 | [`server/README.md`](server/README.md) |

@@ -4,10 +4,11 @@
 > [`docs/agent.md`](agent.md) 为准；上报字段以 [`docs/api.md`](api.md) §2 为准；指标与单位以
 > [`docs/database.md`](database.md) §5.7.2 为准。本文只回答一个问题：**「现在做到哪了」。**
 >
-> **核验基准**：工作区 `D:\phpstudy_pro\WWW\Vantage`，`HEAD = 9a091da`（git 历史仅此 1 个提交，
-> 为 `vantage-core` 落地提交；**Agent 全部代码目前只在暂存区**）。
->
-> **核验时间**：2026-09-28。
+> **核验基准**：工作区 `D:\phpstudy_pro\WWW\Vantage`。
+> 首次核验 2026-09-28（`HEAD = 9a091da`，Agent 代码仅在暂存区）；
+> **最近核验 2026-10-01（`HEAD = ab83d7f`）**：P0/P1 完成，`go vet ./...` 与 `go test ./... -count=1`
+> **首次全绿**，Agent 实现已进版本历史（`8737820`），测试修复与清理见 `1c6dd9a`，
+> 改动全记录见 [`docs/agent-changes-2026-10-01.md`](agent-changes-2026-10-01.md)。
 >
 > **核验方式**（全部实跑，非阅读推断）：静态清点 `agent/**` + `go build ./...` + `go vet ./...` +
 > `go test ./...`（含 `-count=1`）+ `CGO_ENABLED=0 GOOS=linux go build` + `server/ npm test`。
@@ -22,15 +23,15 @@
 
 | # | 结论 | 证据 |
 |---|---|---|
-| 1 | **Agent 主体已实现**：采集 / 探活 / 组包签名 / 上报重试 / 配置校验 / SIGHUP 热重载全部落地 | 非测试代码 **6736 行 / 30 个文件**，测试 **3306 行 / 9 个文件**（`agent/**` 共 39 个 `.go`） |
-| 2 | `go build ./...` 与 Linux 静态交叉编译**通过**，产出 7.3MB 单文件静态二进制（符合 `docs/agent.md` §10） | 见 §5 实测记录 |
-| 3 | ⛔ **唯一阻塞项**：`internal/prober/ping_test.go:57` 有一个 ASCII 引号笔误 → **整个 prober 包测试无法编译**，`go test ./...` 退出码 1 | 见 §8 R-01 |
-| 4 | **文档口径落后于代码**：README 组件表仍写 Agent「未开工」、§3.2 仍写「Go Agent 尚未开工」、§7 里程碑整列 ⏳ | 见 §6 D-01/D-02 |
+| 1 | **Agent 主体已实现**：采集 / 探活 / 组包签名 / 上报重试 / 配置校验 / SIGHUP 热重载全部落地 | 非测试代码 **~6700 行 / 29 个文件**，测试 **3306 行 / 9 个文件**（`agent/**` 共 38 个 `.go`，不含已删草稿） |
+| 2 | `go build ./...` 与 Linux 静态交叉编译**通过**，产出 7.3MB 单文件静态二进制（符合 `docs/agent.md` §10） | 见 §5 实测记录（2026-09-28、2026-10-01 两次） |
+| 3 | ✅ **测试已全绿（2026-10-01）**：R-01 引号笔误修复后 prober 测试首次真正运行，暴露的 9 个失败用例已逐一定性处理（2 个代码缺陷修复、1 个测试向量纠正、2 个环境用例明确 skip） | `go vet ./...` / `go test ./... -count=1` exit 0；见 §5.1 与变更说明 §2 |
+| 4 | ✅ **文档口径已对齐（2026-10-01，`ab83d7f`）**：README 组件表/§3.2/§7 与 `docs/agent.md` §2 模块表（retry 内联、补 4 包）均已纠正；D-01/D-03 关闭 | 见 §6 与变更说明 §3 |
 | 5 | **M5 / M6 真未开工**：Docker 采集（配置层显式拒绝）、Windows/macOS（启动即拒绝） | 见 §4、§7 |
 | 6 | **M2 部署侧未开工**：仓库内没有任何 `.sh` / `.service` 文件 —— `vantage.sh`、systemd unit、`setcap` 运维文档全缺 | 见 §7 |
-| 7 | 全部 Agent 实现（95 文件 / +19002 行，含 contracts 与 server 测试）**尚未提交**，仅在 git 暂存区 | §5 实测记录 |
+| 7 | ✅ **Agent 实现已提交（`8737820`，2026-09-30，98 文件 / +17858 行）**；其顺序偏差（红测试与草稿入库）已由 `1c6dd9a` 补救 | `git log`；§5.3 |
 
-**一句话**：**M1–M4 的核心代码路径基本齐了，卡在「测试红 + 部署侧空白 + 文档没跟上 + 没提交」这四件事上。**
+**一句话（2026-10-01）**：**测试绿了、文档对齐了、代码进了历史；剩下的就是「补测试覆盖（A-T06/07/08）、真机 E2E 留痕（A-T09）、部署侧（A-T10～T13）」三件事。**
 
 ---
 
@@ -47,19 +48,19 @@
 | `internal/logging` | 1 | ❌ | slog，`text`/`json`，文件轮转 | §8 |
 | `internal/metric` | 2 | ✅ 1 | 指标全名拼接与维度转义（消费 `contracts/metric-names.json`） | §3 |
 | `internal/model` | 2 | ✅ 1 | 上报体 / 心跳结构与本地校验（消费 `contracts/wire/*.json`） | §5 |
-| `internal/prober` | 8 | ✅ 3（当前**编译失败**） | `ping`（非特权 ICMP + TCP 降级）/ `http(s)` / `tcp` | §4 |
+| `internal/prober` | 8 | ✅ 3 | `ping`（非特权 ICMP + TCP 降级）/ `http(s)` / `tcp`；2026-10-01 起另含 `errclass_{linux,windows,other}.go` 平台错误码 | §4 |
 | `internal/reporter` | 4 | ✅ 2 | 组包 → 签名 → gzip → POST → 重试 → 超限裁剪 | §5 |
 | `internal/scheduler` | 1 | ❌ | 采集/上报调度、心跳节流、SIGHUP 整代重启、自监控 | §7、§10 |
 | `internal/ulid` | 1 | ❌ | `batch_id`（幂等键）生成 | §5.2 |
 | `internal/version` | 1 | ❌ | 版本号与 `User-Agent` | §2 |
-| ~~`internal/retry`~~ | 0 | — | **文档 §2 列了这个包，实际不存在**：重试内联在 `internal/reporter/reporter.go:370-418` | §2、§5.2 |
+| ~~`internal/retry`~~ | 0 | — | **文档 §2 已于 2026-10-01 纠正**（A-T05）：重试内联在 `internal/reporter/reporter.go`，无独立包 | §2、§5.2 |
 | ~~`internal/buffer`~~ | 0 | — | ✅ 按决策 G1 已删除（无磁盘缓存、不补传） | §2 |
-| `agent/tmp_cksum_check` | 1 | ❌ | ⚠️ **临时草稿**（写 ping 测试时的独立校验和验证程序），**已被 `git add`** | — |
+| ~~`agent/tmp_cksum_check`~~ | 0 | — | ✅ 临时草稿已删（2026-10-01，`1c6dd9a`）；`.gitignore` 已兜底 `agent/tmp_*/`（A-T23） | — |
 
-**统计**：39 个 `.go` 文件（9 个测试文件）；非测试 **6736** 行，测试 **3306** 行；`collector/testdata` 夹具 **21** 个文件。
+**统计（2026-10-01，不含已删草稿）**：38 个 `.go` 文件（9 个测试文件）；非测试 **~6700** 行，测试 **3306** 行；`collector/testdata` 夹具 **21** 个文件。
 
-**有测试的包**：`auth` `config` `metric` `model` `prober`(✗) `reporter`
-**无测试的包**：`cmd/agent` `collector` `logging` `scheduler` `ulid` `version` `tmp_cksum_check`
+**有测试的包**：`auth` `config` `metric` `model` `prober` ✅ `reporter`
+**无测试的包**：`cmd/agent` `collector` `logging` `scheduler` `ulid` `version`（对应待办 A-T06/A-T07/A-T08）
 
 ---
 
@@ -72,7 +73,7 @@
 | §1.2 单向宗旨 | ⛔ 只出站、不监听、不解析响应中除 `{ok, server_ts}` 外的内容 | `main.go` 全文无 `Listen`/`Serve`；`reporter.go:457-500` 只读 `ok`/`server_ts` | ⛔ ✅ |
 | §1.1 单文件静态二进制 | Go 1.22+，无运行时依赖 | `CGO_ENABLED=0` 交叉编译产出 7.3MB 单文件 | ✅ |
 | §2 模块划分 | `cmd/agent`、`config`、`collector`、`prober`、`scheduler`、`reporter`、`auth`、`version` | 均存在 | ✅ |
-| §2 `internal/retry/` | 内存级重试独立模块 | **不存在该包**，功能内联在 `reporter` | 🟡 见 §6 D-03 |
+| §2 `internal/retry/` | 内存级重试独立模块 | **不存在该包**，功能内联在 `reporter` | ✅ 文档已于 2026-10-01 纠正（A-T05，D-03 关闭） |
 | §2 `internal/buffer/` | ⛔ 已定删除 | 确实不存在 | ✅ |
 | §3 六类采集器 | `cpu` `mem` `disk` `net` `gpu` `process` | `collector/{cpu,mem,disk,net,gpu,process}.go` | ✅ |
 | §3 GPU | `nvidia-smi --query-gpu … --format=csv`；无卡/无工具优雅降级 | `gpu.go`：静态探测 + `[N/A]` 容错 + 连续失败回落 `gpu.nvidia=false` | ✅ |
@@ -117,7 +118,24 @@
 
 ---
 
-## 5. 实测验证记录（2026-09-28）
+## 5. 实测验证记录（2026-09-28 首测；2026-10-01 复测）
+
+### 5.0 复测记录（2026-10-01，`HEAD = ab83d7f`）
+
+| 命令 | 结果 |
+|---|---|
+| `go vet ./...` | ✅ exit 0（首测 exit 1，R-01 已修） |
+| `go test ./... -count=1` | ✅ **全绿 exit 0**：`auth` 0.33s / `config` 0.34s / `metric` 0.34s / `model` 0.27s / `prober` 2.83s / `reporter` 0.72s；其余 6 包无测试文件 |
+| `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath ./cmd/agent` | ✅ 通过 |
+
+prober 测试首次真正运行后暴露 9 个失败用例，定性为 2 个代码缺陷（`splitHostPort` 歧义判定、
+Windows errno 伪值分类）、1 个测试向量错误（校验和属性用例 4 字节向量）、2 个环境依赖用例
+（UDP+IPAddr 仅 Linux、DNS 劫持环境），处置见 [`docs/agent-changes-2026-10-01.md`](agent-changes-2026-10-01.md) §2。
+Windows 跑测试的预期 skip 与 WARN 对照表见 [`docs/agent-testing.md`](agent-testing.md) §4。
+真机 E2E（`e2e_test.go`）仍未跑（需 Linux + `VANTAGE_E2E_*`，见首测记录与 A-T09）。
+
+以下 §5.1–§5.3 为 2026-09-28（`HEAD = 9a091da`，Agent 代码仅在暂存区）的**首测记录**，保留作对照 ——
+其中「go vet / go test 失败」的结论已被 §5.0 的复测取代。
 
 ### 5.1 Go Agent
 
@@ -184,9 +202,9 @@ npm test
 
 | # | 偏差 | 细节 | 处置 |
 |---|---|---|---|
-| D-01 | README 组件表与状态表 | README §1 表把 `vantage-agent` 写成**「未开工」**，§顶部又写「🚧 进行中」；§3.2 写「Go Agent 尚未开工，用脚本手工联调」；§7 里程碑 M2–M6 整列 ⏳ | 待办 A-T04 |
+| D-01 | README 组件表与状态表 | README §1 表把 `vantage-agent` 写成**「未开工」**，§顶部又写「🚧 进行中」；§3.2 写「Go Agent 尚未开工，用脚本手工联调」；§7 里程碑 M2–M6 整列 ⏳ | ✅ 已解决（2026-10-01，A-T04，`ab83d7f`） |
 | D-02 | README §7 里程碑 | M1 行只承认「中心侧 ✅（Agent 待做）」，与本文 §4 不符 | 待办 A-T04 |
-| D-03 | `docs/agent.md` §2 模块表 | 列了 `internal/retry/`，实际无此包（重试内联于 `reporter`）；同时代码新增了文档未列的 `internal/{logging,metric,model,ulid}` | 待办 A-T05（改文档，不是改代码） |
+| D-03 | `docs/agent.md` §2 模块表 | 列了 `internal/retry/`，实际无此包（重试内联于 `reporter`）；同时代码新增了文档未列的 `internal/{logging,metric,model,ulid}` | ✅ 已解决（2026-10-01，A-T05，`ab83d7f`）；新发现的 §3 数据源列 gopsutil 口径登记为 A-T25 |
 | D-04 | `docs/agent.md` §3 能力声明 | 文档说「首次上报与能力变化时必填」；`gpu.go` 的"连续失败后回落 `gpu.nvidia=false`"会触发**能力变化重报**，是文档未描述的额外上报量来源（代码已在注释中记录） | 观察项，暂不改 |
 | D-05 | `docs/agent.md` §3 `collect.process.watch` | 配置项存在且校验，但**上报格式无承载字段**，`process.go:99-105` 自注为「本期只记录、不产出指标」，启动时打一次 WARN | 待办 A-T14（属契约变更，需先改文档） |
 | D-06 | 中心侧 M-05 / M-06 | `host.boot_time` 口径（秒/毫秒/RFC3339）与 `disk[].device` 是否必填，中心 `server/README.md` 明确「等 Agent 定型后收窄为一」 | 待办 A-T15 / A-T16 |
@@ -215,12 +233,12 @@ npm test
 
 | # | 级别 | 问题 | 影响 | 处置 |
 |---|---|---|---|---|
-| **R-01** | 🔴 阻塞 | `agent/internal/prober/ping_test.go:57` 把中文引号写成了 ASCII `"`：`"…证明"补零在低位"而不是"丢弃末字节""` | 整个 `prober` 包测试无法编译（`ping_test` / `http_test` / `tcp_test` 全部未运行）；`go test ./...` 与 `go vet ./...` 退出码 1，**会挡住 CI** | 待办 A-T01（一行修复） |
+| **R-01** | 🔴→✅ | ~~`agent/internal/prober/ping_test.go:57` 引号笔误~~ **已解决（2026-10-01，`1c6dd9a`）**：修复后 prober 测试首次运行，暴露的 9 个失败用例已处理，`go vet` / `go test ./...` 恢复通过 | ~~挡 CI~~ 不再阻塞 | 变更说明 §2 |
 | R-02 | 🟡 | `collector` / `scheduler` 两个**最复杂**的包零测试覆盖（`collector` 有 21 个夹具却无测试） | `/proc` 解析、速率差值、调度/心跳/reload 语义无回归保护 | 待办 A-T06 / A-T07 |
-| R-03 | 🟡 | Agent 实现未提交，仅在工作区暂存区 | 一次误操作（`git reset --hard`、`checkout`）即丢失；进度无法被 git 追溯 | 待办 A-T03 |
+| R-03 | 🟡→✅ | ~~Agent 实现未提交，仅在工作区暂存区~~ **已解决（2026-09-30，`8737820`）**；其"红测试与草稿一并入库"的顺序偏差由 `1c6dd9a` 补救 | ~~不可追溯~~ 已进版本历史 | 待办 A-T03 完成记录 |
 | R-04 | 🟡 | 真机 E2E 从未留痕 | 「签名/TLS/schema 全都对」目前只有假中心 + 中心侧黄金字节测试支撑，没有一次真实握手的记录 | 待办 A-T09 |
-| R-05 | 🟢 | `agent/tmp_cksum_check/main.go` 草稿已进暂存区 | 会被当成正式代码提交，并出现在 `go test ./...` 的包列表里 | 待办 A-T02 |
-| R-06 | 🟢 | 文档口径漂移（D-01…D-03） | 后续接手者会以为 Agent 未开工、或去找不存在的 `internal/retry` | 待办 A-T04 / A-T05 |
+| R-05 | 🟢→✅ | ~~`agent/tmp_cksum_check/main.go` 草稿已进暂存区~~ **已解决（2026-10-01，`1c6dd9a`）**：草稿已删，`.gitignore` 兜底 `agent/tmp_*/` | — | 待办 A-T02/A-T23 |
+| R-06 | 🟢 | 文档口径漂移（D-01…D-03） | 后续接手者会以为 Agent 未开工、或去找不存在的 `internal/retry` | D-01/D-03 已解决（A-T04/A-T05）；D-04～D-07 仍在 |
 
 ---
 
@@ -229,6 +247,7 @@ npm test
 | 日期 | 变更 |
 |---|---|
 | 2026-09-28 | 首次建立本状态文档：清点 Agent 代码（39 `.go` / 非测试 6736 行 / 测试 3306 行），实跑构建、交叉编译、`go vet`、`go test` 与 `server/ npm test`，登记 R-01…R-06 与 D-01…D-07 |
+| 2026-10-01 | 复测更新：R-01/R-03/R-05 与 D-01/D-03 关闭（提交 `8737820`、`1c6dd9a`、`ab83d7f`）；`go vet` / `go test ./...` **首次全绿**（prober 首次真正运行，9 个暴露用例定性处理：splitHostPort 歧义判定与 Windows errno 分类两个代码缺陷修复、1 个测试向量纠正、2 个环境用例明确 skip）；新增测试手册 `docs/agent-testing.md` 与改动记录 `docs/agent-changes-2026-10-01.md`。新登记 A-T25（`docs/agent.md` §3 数据源列 gopsutil 口径收窄） |
 
 ---
 
@@ -238,6 +257,8 @@ npm test
 |---|---|
 | Agent 该怎么做（行为契约） | [`docs/agent.md`](agent.md) |
 | Agent 还差什么（待办清单） | [`docs/agent-todo.md`](agent-todo.md) |
+| **测试怎么跑（本机/真机/契约）** | [`docs/agent-testing.md`](agent-testing.md) |
+| **2026-10-01 改了什么** | [`docs/agent-changes-2026-10-01.md`](agent-changes-2026-10-01.md) |
 | 上报协议 / 错误码 | [`docs/api.md`](api.md) §2 |
 | 指标命名与单位 | [`docs/database.md`](database.md) §5.7.2 |
 | 两端共享契约 | [`contracts/README.md`](../contracts/README.md) |
