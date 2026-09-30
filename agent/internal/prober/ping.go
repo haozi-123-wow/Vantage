@@ -195,6 +195,13 @@ func splitHostPort(host string) (string, string, bool) {
 			// ":80" —— 没写主机，ping 就没有目标可言。
 			return "", "", false
 		}
+		// ⚠️ 带了端口但主机部分不是 IP 字面量、也没用方括号包起来：
+		//    这正是 `dns.example.com:443` 这类「主机名冒号端口」写法 ——
+		//    与 IPv6 字面量无法区分（文档见上），必须判为歧义而不是硬拆。
+		//    （方括号写法 `[主机名]:443` 用户意图明确，放行。）
+		if !strings.HasPrefix(h, "[") && net.ParseIP(n) == nil {
+			return "", "", false
+		}
 		return n, p, true
 	}
 	// 走到这里说明 SplitHostPort 失败了：可能是「确实没带端口」，也可能是有歧义。

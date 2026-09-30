@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -54,7 +55,7 @@ func TestICMPChecksumKnownVectors(t *testing.T) {
 			name: "奇数长度补零等价性 0x00010200",
 			in:   []byte{0x00, 0x01, 0x02, 0x00},
 			want: 0xfdfe,
-			why:  "与上一条必须同值：证明"补零在低位"而不是"丢弃末字节"",
+			why:  "与上一条必须同值：证明「补零在低位」而不是「丢弃末字节」",
 		},
 		{
 			name: "0x0001f203",
@@ -87,8 +88,11 @@ func TestICMPChecksumVerifyProperty(t *testing.T) {
 	//    奇偶长度处理这几类错误。
 	for _, pkt := range [][]byte{
 		{0x08, 0x00, 0x00, 0x00, 0x12, 0x34, 0x00, 0x01},
-		{0x00, 0x00, 0x00, 0x00},
-		{0xff, 0xff, 0xff, 0xff},
+		// ⚠️ 以下两个向量必须是 ≥ icmpHeaderLen(8) 字节：verifyICMPChecksum 的前置条件
+		//    就是"至少一个完整 ICMP 头"，更短的输入直接判 false（len < 8 短路）。
+		//    早期版本写成 4 字节，测试第一次真正跑起来才暴露（修复前 prober 包编译失败）。
+		{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+		{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
 		{0x08, 0x00, 0x00, 0x00, 0xab, 0xcd, 0x12, 0x34, 0xaa},             // 奇数长度
 		{0x08, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0xde, 0xad, 0xbe}, // 奇数长度 + 高字节
 	} {
@@ -529,6 +533,14 @@ func TestPingNoAnswerIsResultNotDegradation(t *testing.T) {
 	//
 	// 用一个本地 UDP socket 冒充 ICMP socket：本地 UDP 不会产生 ICMP echo reply，
 	// 因此这条路径必然在 timeout 内超时（离线、确定、不需要任何权限）。
+	//
+	// ⚠️ 仅 Linux：icmpEchoRoundTrip 以 net.IPAddr 为目标向 UDP socket WriteTo，
+	//    Linux 的 sendto 容忍这种写法（报文发出去无人应答 → 读侧按 deadline 超时）；
+	//    Windows 的 sendto 直接返回 WSAEINVAL（invalid argument），在写侧就失败，
+	//    测不到"读 deadline 生效、超时翻成超时文案"这件事本身。
+	if runtime.GOOS != "linux" {
+		t.Skipf("本用例依赖 Linux 对 UDP+IPAddr 的 sendto 容忍行为（当前 %s）", runtime.GOOS)
+	}
 	sock, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("起本地 UDP（模拟 ICMP socket）失败：%v", err)

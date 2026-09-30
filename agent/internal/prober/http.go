@@ -26,7 +26,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -63,16 +62,13 @@ const maxAllowedTimeout = 30 * time.Second
 // 或者 body_contains 不符时把 HTML 塞进错误文案，都能轻易越过 512 字节。
 const maxProbeErrorBytes = model.MaxProbeError
 
-// syscall 错误码的别名。
+// syscall 错误码的别名（ECONNREFUSED / ENETUNREACH / EHOSTUNREACH）。
 //
-// ⚠️ 单独起这三个名字是为了让 classify 那几行读起来就是"连接被拒绝 / 网络不可达 /
-// 主机不可达"三件事，而不是一串 syscall 常量；它们在各平台上的数值不同，
-// 用 errors.Is 比较即可，⛔ 不要改成字符串匹配（见 classNetErr 的注释）。
-var (
-	syscallECONNREFUSED = syscall.ECONNREFUSED
-	syscallENETUNREACH  = syscall.ENETUNREACH
-	syscallEHOSTUNREACH = syscall.EHOSTUNREACH
-)
+// ⚠️ 定义在带构建标签的 errclass_<os>.go 里，本文件不再直接引用 syscall 常量：
+//    Windows 上 syscall.ECONNREFUSED 是 Go 内部的伪 errno（APPLICATION_ERROR 段），
+//    真实拨号错误携带的是 WSAECONNREFUSED(10061)，直接引用会导致分类永远失配。
+//    它们在各平台上的数值不同，用 errors.Is 比较即可，
+//    ⛔ 不要改成字符串匹配（见 classNetErr 的注释）。
 
 // errTruncated 文案截断的可见标记。
 // ⚠️ 必须有标记：不然运维会把截断当成"错误原文就长这样"，去搜一个不存在的报错。

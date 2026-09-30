@@ -233,6 +233,13 @@ func TestHTTPProbeDNSFailure(t *testing.T) {
 	if res.Up {
 		t.Fatal("DNS 解析不了必须 up=false")
 	}
+	// ⚠️ 环境自检：个别开发机/内网会把任何域名都"解析成功"（DNS 劫持或安全软件拦截），
+	//    此时拿到的是一条 HTTP 响应（如网关 502）而不是解析失败 —— 那是环境属性，
+	//    不是被测代码的缺陷，跳过并说明，⛔ 不改断言迁就环境。
+	if res.StatusCode != nil {
+		t.Skipf("本机 DNS 把 %q 解析成功了（疑似劫持/拦截），无法模拟解析失败；实际收到状态码 %d",
+			"nonexistent-host.invalid", *res.StatusCode)
+	}
 	msg := errText(res.Error)
 	if !strings.Contains(msg, "DNS") && !strings.Contains(msg, "解析") && !strings.Contains(msg, "超时") {
 		t.Fatalf("error 应说明解析/超时问题，实际 %q", msg)
