@@ -144,6 +144,7 @@ Windows 跑测试的预期 skip 与 WARN 对照表见 [`docs/agent-testing.md`](
 | `--once --print-body` | 退出码 0；`server_ts=1790844501013，attempts=1，压缩前 2815B → 实发 1179B`；**报文 grep 无 `vk_`/`vs_`**（红线 ✓） |
 | 首次上报 | `host.capabilities` 随首报携带：`disk.inode/io=true、net.conn_count=true、gpu.nvidia=false（无 N 卡优雅降级）、process.top=true`；hostname 取自真机 |
 | 落库 | `metrics_raw` 149 行 / `agents` 1 行（库 `vantage_e2e`，三角色按 init-db.sql 创建） |
+| **常驻模式** | Owner 决定保留运行：agent 转常驻调度，**连续两个周期 30s 整点上报成功**（batch_id 轮换、attempts=1），`metrics_raw` 149→336 行，中心面板状态 `online`、`last_seen` 实时更新 —— 心跳节流/调度/落库的常驻语义真机成立 |
 
 **真机首跑抓到并修复的缺陷（A-T26）**：`--once` 单轮采集永远产不出 `metrics.cpu`（差分指标需两个
 采样点）→ 本地校验必拒。Windows 上不可达（`Supported=false` 提前拒绝）、`cmd/agent` 无测试，

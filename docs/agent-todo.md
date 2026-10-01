@@ -155,8 +155,10 @@ E2E 3/3 PASS（WrongSecret / RealCenter / IdempotentReplay）；`--once` 上报 
 （2815B→1179B）、报文 grep 无凭证、首报带 `host.capabilities`（gpu.nvidia=false 优雅降级）；
 `metrics_raw` 149 行落库；`setsid` 后中心跨堡垒机会话存活。
 **真机首跑抓出 A-T26 缺陷并当场修复**（`--once` 缺预热轮）——本条存在的意义被完美验证。
-④ 清理：待 Owner 决定保留运行还是回收（中心 `setsid` 常驻、库 `vantage_e2e`、凭证在目标机
-`/etc/vantage/`），决定后执行并回填本行。
+④ 清理：Owner 决定**保留并常驻运行**（2026-10-01）——agent 以常驻调度模式接管（30s 周期，
+日志 `/var/log/vantage-agent.log`），联调凭证转正为该机长期凭证（`e2e-linux-01`，中心状态
+`online`，`last_seen` 实时，`metrics_raw` 持续增长 149→336 行/两周期）；后续转正式部署时按
+A-T10～T13 交付物重装即可。
 
 ---
 
