@@ -133,26 +133,34 @@ type diskIODevice struct {
 }
 
 // update 用本次采样推进所有差分器并算出结果。
+//
+// ⛔ 每个计数器在同一次 update 里只允许 step **一次**：rate() 与 delta() 都会推进差分器，
+// 对同一差分器二次 step 时 dt=0 → ok=false —— 曾因此 latency_ms 恒为 nil（真机测试暴露，
+// 见 A-T28）。所以这里统一用 step() 拿 (delta, dt)，rate 在本函数内现算。
 func (d *diskIODevice) update(cur diskIOStat, at time.Time) diskIODelta {
 	var out diskIODelta
 
 	// --- 吞吐与 IOPS --------------------------------------------------------
-	if v, ok := d.sectorsRead.rate(numOr(cur, ioSectorsRead), at); ok {
-		out.readBps = f64(v * sectorBytes)
+	dSectR, dt, okSectR := d.sectorsRead.step(numOr(cur, ioSectorsRead), at)
+	if okSectR {
+		out.readBps = f64(dSectR / dt * sectorBytes)
 	}
-	if v, ok := d.sectorsWritten.rate(numOr(cur, ioSectorsWritten), at); ok {
-		out.writeBps = f64(v * sectorBytes)
+	dSectW, _, okSectW := d.sectorsWritten.step(numOr(cur, ioSectorsWritten), at)
+	if okSectW {
+		out.writeBps = f64(dSectW / dt * sectorBytes)
 	}
-	if v, ok := d.readCompleted.rate(numOr(cur, ioReadCompleted), at); ok {
-		out.readIOPS = f64(v)
+	dRC, _, okRC := d.readCompleted.step(numOr(cur, ioReadCompleted), at)
+	if okRC {
+		out.readIOPS = f64(dRC / dt)
 	}
-	if v, ok := d.writeCompleted.rate(numOr(cur, ioWriteCompleted), at); ok {
-		out.writeIOPS = f64(v)
+	dWC, _, okWC := d.writeCompleted.step(numOr(cur, ioWriteCompleted), at)
+	if okWC {
+		out.writeIOPS = f64(dWC / dt)
 	}
 
 	// --- 平均延迟 = ΔIO 耗时 / Δ完成次数 -----------------------------------
-	dMsR, okMsR := d.msReading.delta(numOr(cur, ioMsReading), at)
-	dMsW, okMsW := d.msWriting.delta(numOr(cur, ioMsWriting), at)
+	dMsR, _, okMsR := d.msReading.step(numOr(cur, ioMsReading), at)
+	dMsW, _, okMsW := d.msWriting.step(numOr(cur, ioMsWriting), at)
 	ioMillis, hasMillis := 0.0, false
 	switch {
 	case okMsR && okMsW:
@@ -166,12 +174,10 @@ func (d *diskIODevice) update(cur diskIOStat, at time.Time) diskIODelta {
 		// ⚠️ 有些驱动（旧 md/dm、部分虚拟/loop 设备）**只维护 ms_io**（下标 9），
 		//    ms_reading/ms_writing 恒为 0。此时若不用 ms_io 兜底，延迟会永远显示 0 ——
 		//    一条"延迟恒为 0"的曲线比没有曲线更误导（看起来像存储性能无限好）。
-		if v, ok := d.msIO.delta(numOr(cur, ioMsIO), at); ok && v > 0 {
+		if v, _, okMsIO := d.msIO.step(numOr(cur, ioMsIO), at); okMsIO && v > 0 {
 			ioMillis, hasMillis = v, true
 		}
 	}
-	dRC, okRC := d.readCompleted.delta(numOr(cur, ioReadCompleted), at)
-	dWC, okWC := d.writeCompleted.delta(numOr(cur, ioWriteCompleted), at)
 	if hasMillis && okRC && okWC {
 		// 分子是"总耗时"（读+写），分母也必须是**总完成次数**，两者口径要一致。
 		if lat, ok := ratioDelta(ioMillis, dRC+dWC); ok {

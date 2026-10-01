@@ -110,6 +110,12 @@ func (c *processCollector) Collect(_ context.Context, s *Snapshot) (bool, error)
 		c.warnRoot.warn(c.log, "读不到进程目录，本轮跳过进程采集", "root", c.root, "err", err)
 		return false, nil
 	}
+	if len(pids) == 0 {
+		// ✅ 与文件头契约一致：进程数一个都数不到 → produced=false。
+		// count=0 是"这台机器没有任何进程"，/proc 可读却零 pid 只会是挂载坏了 —— 伪造 0 比没数据更糟。
+		c.warnRoot.warn(c.log, "进程目录里没有任何数字 pid 目录，本轮跳过进程采集", "root", c.root)
+		return false, nil
+	}
 
 	machineTicks, ncpu := c.machineCPU()
 	c.ncpu = ncpu
