@@ -155,10 +155,15 @@ E2E 3/3 PASS（WrongSecret / RealCenter / IdempotentReplay）；`--once` 上报 
 （2815B→1179B）、报文 grep 无凭证、首报带 `host.capabilities`（gpu.nvidia=false 优雅降级）；
 `metrics_raw` 149 行落库；`setsid` 后中心跨堡垒机会话存活。
 **真机首跑抓出 A-T26 缺陷并当场修复**（`--once` 缺预热轮）——本条存在的意义被完美验证。
-④ 清理：Owner 决定**保留并常驻运行**（2026-10-01）——agent 以常驻调度模式接管（30s 周期，
+④ 处置：Owner 先决定**保留并常驻运行**（2026-10-01）——agent 以常驻调度模式接管（30s 周期，
 日志 `/var/log/vantage-agent.log`），联调凭证转正为该机长期凭证（`e2e-linux-01`，中心状态
-`online`，`last_seen` 实时，`metrics_raw` 持续增长 149→336 行/两周期）；后续转正式部署时按
-A-T10～T13 交付物重装即可。
+`online`，`last_seen` 实时，`metrics_raw` 持续增长 149→336 行/两周期）；随后 Owner 要求**停止
+运行但保留环境**（同日，SIGTERM 优雅退出）——进程已停，凭证（`/etc/vantage/`）、二进制
+（`/usr/local/bin/vantage-agent`）、源码克隆（`/opt/vantage/src`）、数据库（`vantage_e2e`）全部
+在位。重启命令：
+`cd /opt/vantage/src/server && setsid nohup npm start </dev/null > /var/log/vantage-core.log 2>&1 &`
+`cd /opt/vantage && setsid nohup /usr/local/bin/vantage-agent --config /etc/vantage/config.yaml </dev/null >> /var/log/vantage-agent.log 2>&1 &`
+（⚠️ `/opt/vantage/creds.txt` 含明文凭证，环境弃用时应删除。）
 
 ---
 
