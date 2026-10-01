@@ -157,6 +157,14 @@ func run() error {
 	return sched.Run(ctx)
 }
 
+// onceWarmupGap 预热轮与正式轮的间隔。
+//
+// ⚠️ 真机 E2E（A-T09）首跑发现：cpu.usage 是差分指标，需要两个采样点；
+// --once 只跑一轮 → metrics.cpu 永远缺失 → 本地校验必挂。该缺陷在 Windows
+// 开发机上不可达（Supported=false 提前拒绝），属于只有真机才能暴露的一类。
+// 修复：先做一轮"预热采集"（产出丢弃，只为喂进上一份样本），间隔后再跑正式轮。
+const onceWarmupGap = 2 * time.Second
+
 // runOnce 采集并上报一次（`--once`）。
 //
 // 用途：真机首次联调与排障 —— 不必等常驻进程跑满一个周期，直接看"这一次到底发出去没有、
@@ -171,6 +179,20 @@ func runOnce(cfg *config.Config, creds *auth.Credentials, logger *slog.Logger, p
 	})
 	if len(collectors) == 0 {
 		return errors.New("没有任何启用的采集器（检查 collect.*.enabled 与平台支持）")
+	}
+
+	// 预热轮：产出丢弃（⛔ 不进 snap），只为让差分类采集器（cpu 使用率/上下文切换、
+	// net/disk 速率）拿到"上一份样本"。否则 metrics.cpu 必填项在单轮模式下永远缺失。
+	var warm collector.Snapshot
+	for _, c := range collectors {
+		if _, err := c.Collect(ctx, &warm); err != nil {
+			logger.Warn("预热采集失败（忽略，正式轮会再试）", "collector", c.Name(), "err", err)
+		}
+	}
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("预热等待被中断：%w", ctx.Err())
+	case <-time.After(onceWarmupGap):
 	}
 
 	var snap collector.Snapshot
