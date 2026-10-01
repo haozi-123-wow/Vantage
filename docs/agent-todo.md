@@ -141,13 +141,22 @@ UDP+IPAddr 仅 Linux 可测、DNS 劫持环境自检 skip），**未放宽任何
 | 依据 | `docs/agent.md` §12.3 排障纪律（日志禁泄凭证）；§5.2 幂等键 |
 | 验收 | ① `logging`：`text` / `json` 两种格式可切换，且**断言输出里不含 key/secret 字样**（含截断形式）；② `ulid`：单调递增、同毫秒不重复、长度/字符集正确；③ `cmd/agent`：`--version` / `--check` 的正常与失败路径（可用 `config.Load` + 临时配置文件） |
 
-### A-T09　真机 E2E 跑通并留痕 ⬜
+### A-T09　真机 E2E 跑通并留痕 ✅（2026-10-01，详见 `docs/agent-status.md` §5.0.1）
 
 | 项 | 内容 |
 |---|---|
 | 问题 | `agent/internal/reporter/e2e_test.go` 需要 `VANTAGE_E2E_CENTER` / `VANTAGE_E2E_AGENT_ID` / `VANTAGE_E2E_KEY` / `VANTAGE_E2E_SECRET`，**从未运行过**；「签名 + TLS + schema + 落库真的通」目前只有假中心与中心侧黄金字节测试间接支撑。且 Windows 开发机上 `collector.Supported=false`，`--once` 会被拦住 → **必须在 Linux 上做** |
 | 依据 | `docs/agent.md` §5.1；`contracts/README.md`（黄金字节须被真实链路接受） |
 | 验收 | ① 在 Linux 机器上跑 `go test -count=1 -run TestE2E -v ./internal/reporter/` 全绿；② 另跑一次 `vantage-agent --check` 与 `--once --print-body`，确认 `--print-body` 输出中**不含凭证**；③ 把「日期 / 中心版本 / 报告字节数 / `server_ts` / 是否首次上报带 `host.capabilities`」记入 `docs/agent-status.md` §5.1；④ 用后清理联调 Agent 与数据 |
+
+**完成记录（2026-10-01）**：Debian 12 真机（经堡垒机，占位 `us-e2e-01`），Go 1.27.1 机上构建，
+中心 0.8.0 + PG **18.4**（基线 16；迁移/分区/落库实测兼容）+ Redis。验收 ①②③ 达成：
+E2E 3/3 PASS（WrongSecret / RealCenter / IdempotentReplay）；`--once` 上报 `server_ts=1790844501013`
+（2815B→1179B）、报文 grep 无凭证、首报带 `host.capabilities`（gpu.nvidia=false 优雅降级）；
+`metrics_raw` 149 行落库；`setsid` 后中心跨堡垒机会话存活。
+**真机首跑抓出 A-T26 缺陷并当场修复**（`--once` 缺预热轮）——本条存在的意义被完美验证。
+④ 清理：待 Owner 决定保留运行还是回收（中心 `setsid` 常驻、库 `vantage_e2e`、凭证在目标机
+`/etc/vantage/`），决定后执行并回填本行。
 
 ---
 
@@ -287,6 +296,24 @@ UDP+IPAddr 仅 Linux 可测、DNS 劫持环境自检 skip），**未放宽任何
 | 验收 | ① §3 数据源列改为真实数据源（含「容量查询走注入的 statfs」这一例外）；② 采集共性要求里「单次采集 <50ms」等结论不变；③ ⛔ 只改口径不改行为要求 |
 | 级别 | P1（文档准确性；建议与 A-T06 写测试时一并做，写测试即为逐行核对数据源） |
 
+### A-T26　修复 `--once` 单轮模式缺预热轮（metrics.cpu 必缺失）✅（2026-10-01，`90e81e8`）
+
+| 项 | 内容 |
+|---|---|
+| 问题 | A-T09 真机首跑发现：`cpu.usage` 是差分指标需要两个采样点，`runOnce` 只跑一轮 → `metrics.cpu` 永远缺失 → 本地校验（中心 schema 底线）必拒。Windows 开发机不可达（`Supported=false` 提前拒绝），`cmd/agent` 无测试 |
+| 修复 | `runOnce` 增加预热采集轮（产出丢弃，只为喂进上一份样本），间隔 `onceWarmupGap=2s` 后跑正式轮；net/disk 速率类同样受益 |
+| 验收 | ① 真机 `--once` 退出码 0 且成功上报（`server_ts=1790844501013`，2815B→1179B）；② 本地 `go vet`/`go test`/Linux 交叉编译全绿 —— 均已达成 |
+| 备注 | ⚠️ `90e81e8` 因开发机会话无 GitHub 凭证**尚未推送**，待 Owner 在常用终端 `git push`；资产机以补丁文件方式先应用了该改动 |
+
+### A-T27　提交 `server/package-lock.json` ⬜
+
+| 项 | 内容 |
+|---|---|
+| 问题 | `server/package-lock.json` 在本地一直是**未跟踪**状态、从未入库；A-T09 克隆部署时 `npm ci` 直接失败（无锁文件可用），只能退回 `npm install`（依赖版本不受锁约束） |
+| 依据 | A-T09 部署实测；README §3 的 `npm install` 流程无法保证可复现 |
+| 验收 | ① `git add server/package-lock.json` 并提交推送；② 部署文档/脚本统一用 `npm ci`（有锁走 ci）；③ `npm ci --omit=dev` 在干净克隆上通过 |
+| 级别 | P1（可复现构建） |
+
 ---
 
 ## 7. 建议执行顺序
@@ -321,3 +348,4 @@ UDP+IPAddr 仅 Linux 可测、DNS 劫持环境自检 skip），**未放宽任何
 |---|---|
 | 2026-09-28 | 首次建立待办清单：A-T01…A-T24，来源为 `docs/agent-status.md` §6/§7/§8 的偏差、未实现项与风险 |
 | 2026-10-01 | P0/P1 完成：A-T01/A-T02/A-T03/A-T04/A-T05/A-T23/A-T24 置 ✅（提交 `1c6dd9a` + `ab83d7f`）；`go vet` / `go test ./...` 首次全绿；新增 A-T25（§3 数据源列 gopsutil 口径收窄）；第 1/2 轮执行顺序标注完成情况。改动细节见 [`docs/agent-changes-2026-10-01.md`](agent-changes-2026-10-01.md) |
+| 2026-10-01(晚) | **A-T09 真机 E2E ✅**（Debian 12 经堡垒机：3/3 PASS + `--once` 真实上报落库，PG 18.4 兼容实测，红线检查通过）；登记并完成 A-T26（`--once` 预热轮修复，`90e81e8`，⚠️ 待推送）；登记 A-T27（package-lock.json 未入库）。上线最小集合仅剩部署侧 A-T10～T13 |

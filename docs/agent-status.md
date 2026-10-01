@@ -132,7 +132,25 @@ prober 测试首次真正运行后暴露 9 个失败用例，定性为 2 个代�
 Windows errno 伪值分类）、1 个测试向量错误（校验和属性用例 4 字节向量）、2 个环境依赖用例
 （UDP+IPAddr 仅 Linux、DNS 劫持环境），处置见 [`docs/agent-changes-2026-10-01.md`](agent-changes-2026-10-01.md) §2。
 Windows 跑测试的预期 skip 与 WARN 对照表见 [`docs/agent-testing.md`](agent-testing.md) §4。
-真机 E2E（`e2e_test.go`）仍未跑（需 Linux + `VANTAGE_E2E_*`，见首测记录与 A-T09）。
+
+### 5.0.1 真机 E2E 记录（2026-10-01，A-T09 ✅，`90e81e8`）
+
+| 项 | 值 |
+|---|---|
+| 环境 | Linux 真机（经堡垒机跳转；占位名 `us-e2e-01`），Debian 12 / 内核 6.1 / x86_64 / 8G；**Go 1.27.1 机上构建**（CGO_ENABLED=0）；中心 0.8.0 直跑宿主机（Node v24.21.0） |
+| 依赖 | ⚠️ PostgreSQL **18.4**（项目基线 16）：init-db 三角色 + 8 个迁移 + 分区全部通过，`metrics_raw` 真实落库 —— **18 兼容性实测成立**；正式环境仍按基线 16 部署 |
+| 中心健康 | `readyz ok=true`；postgres 15ms / redis 3ms / `noeviction` 且 `evicted_keys=0`（决策 #51/R15 真机成立）；`setsid` 分离后在堡垒机会话断开后持续存活 |
+| E2E 用例 | `TestE2EWrongSecretIsRejected` / `TestE2ERealCenterAcceptsAgentBytes` / `TestE2EIdempotentReplay` **3/3 PASS**（`ok vantage-agent/internal/reporter 0.757s`） |
+| `--once --print-body` | 退出码 0；`server_ts=1790844501013，attempts=1，压缩前 2815B → 实发 1179B`；**报文 grep 无 `vk_`/`vs_`**（红线 ✓） |
+| 首次上报 | `host.capabilities` 随首报携带：`disk.inode/io=true、net.conn_count=true、gpu.nvidia=false（无 N 卡优雅降级）、process.top=true`；hostname 取自真机 |
+| 落库 | `metrics_raw` 149 行 / `agents` 1 行（库 `vantage_e2e`，三角色按 init-db.sql 创建） |
+
+**真机首跑抓到并修复的缺陷（A-T26）**：`--once` 单轮采集永远产不出 `metrics.cpu`（差分指标需两个
+采样点）→ 本地校验必拒。Windows 上不可达（`Supported=false` 提前拒绝）、`cmd/agent` 无测试，
+**只有真机首跑才能暴露**。修复：`runOnce` 预热轮（`90e81e8`）。另发现 `server/package-lock.json`
+从未入库（npm ci 在克隆机上失败），登记 A-T27。
+
+真机操作方法见 [`docs/agent-testing.md`](agent-testing.md) §7。
 
 以下 §5.1–§5.3 为 2026-09-28（`HEAD = 9a091da`，Agent 代码仅在暂存区）的**首测记录**，保留作对照 ——
 其中「go vet / go test 失败」的结论已被 §5.0 的复测取代。
@@ -236,7 +254,7 @@ npm test
 | **R-01** | 🔴→✅ | ~~`agent/internal/prober/ping_test.go:57` 引号笔误~~ **已解决（2026-10-01，`1c6dd9a`）**：修复后 prober 测试首次运行，暴露的 9 个失败用例已处理，`go vet` / `go test ./...` 恢复通过 | ~~挡 CI~~ 不再阻塞 | 变更说明 §2 |
 | R-02 | 🟡 | `collector` / `scheduler` 两个**最复杂**的包零测试覆盖（`collector` 有 21 个夹具却无测试） | `/proc` 解析、速率差值、调度/心跳/reload 语义无回归保护 | 待办 A-T06 / A-T07 |
 | R-03 | 🟡→✅ | ~~Agent 实现未提交，仅在工作区暂存区~~ **已解决（2026-09-30，`8737820`）**；其"红测试与草稿一并入库"的顺序偏差由 `1c6dd9a` 补救 | ~~不可追溯~~ 已进版本历史 | 待办 A-T03 完成记录 |
-| R-04 | 🟡 | 真机 E2E 从未留痕 | 「签名/TLS/schema 全都对」目前只有假中心 + 中心侧黄金字节测试支撑，没有一次真实握手的记录 | 待办 A-T09 |
+| R-04 | 🟡→✅ | ~~真机 E2E 从未留痕~~ **已解决（2026-10-01，§5.0.1）**：Debian 12 真机 3/3 E2E PASS + `--once` 真实上报落库，顺带抓出并修复 A-T26 | — | 已完成 |
 | R-05 | 🟢→✅ | ~~`agent/tmp_cksum_check/main.go` 草稿已进暂存区~~ **已解决（2026-10-01，`1c6dd9a`）**：草稿已删，`.gitignore` 兜底 `agent/tmp_*/` | — | 待办 A-T02/A-T23 |
 | R-06 | 🟢 | 文档口径漂移（D-01…D-03） | 后续接手者会以为 Agent 未开工、或去找不存在的 `internal/retry` | D-01/D-03 已解决（A-T04/A-T05）；D-04～D-07 仍在 |
 
@@ -248,6 +266,7 @@ npm test
 |---|---|
 | 2026-09-28 | 首次建立本状态文档：清点 Agent 代码（39 `.go` / 非测试 6736 行 / 测试 3306 行），实跑构建、交叉编译、`go vet`、`go test` 与 `server/ npm test`，登记 R-01…R-06 与 D-01…D-07 |
 | 2026-10-01 | 复测更新：R-01/R-03/R-05 与 D-01/D-03 关闭（提交 `8737820`、`1c6dd9a`、`ab83d7f`）；`go vet` / `go test ./...` **首次全绿**（prober 首次真正运行，9 个暴露用例定性处理：splitHostPort 歧义判定与 Windows errno 分类两个代码缺陷修复、1 个测试向量纠正、2 个环境用例明确 skip）；新增测试手册 `docs/agent-testing.md` 与改动记录 `docs/agent-changes-2026-10-01.md`。新登记 A-T25（`docs/agent.md` §3 数据源列 gopsutil 口径收窄） |
+| 2026-10-01(晚) | **A-T09 真机 E2E 完成**（§5.0.1）：Debian 12 真机 3/3 E2E PASS、`--once` 真实上报落库（PG 18.4 实测兼容）、红线检查通过；真机首跑抓出 `--once` 缺 cpu 预热轮的缺陷并修复（A-T26，`90e81e8`）；登记 A-T27（`server/package-lock.json` 未入库，克隆机 `npm ci` 失败）。R-04 关闭 |
 
 ---
 
