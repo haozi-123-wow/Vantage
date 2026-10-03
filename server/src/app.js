@@ -16,6 +16,7 @@ import cookie from '@fastify/cookie';
 import Fastify from 'fastify';
 
 import { registerAgentReportRoutes } from './routes/agent.report.js';
+import { registerAuthRoutes } from './routes/auth.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { buildErrorBody, normalizeError } from './utils/errors.js';
 
@@ -28,7 +29,8 @@ export const SERVICE_VERSION = '0.8.0';
  *  ✅ 已实现  GET  /healthz · /readyz · /version
  *  ✅ M1      POST /api/v1/agent/report        （解压→验签→幂等→批量落库，docs/api.md §2.1）
  *  ✅ M1      POST /api/v1/agent/heartbeat     （共用 Agent 限流桶，§2.2）
- *  ⏳ M2      /api/v1/auth/*                   （登录/登出/2FA/恢复码，§4.1）
+ *  ✅ B4/B5   /api/v1/auth/login · me · logout · logout-all · password
+ *             （会话/CSRF/登录限流/审计，docs/api.md §4.1、§4.1.1 ⑦；2FA 三件套与恢复码在 B6/B7）
  *  ⏳ M2      /api/public/*                    （免登录只读快照 + 严格限流，§3）
  *  ⏳ M2      /api/v1/hosts/*                  （主机、历史查询、进程 Top，§4.2/§4.3）
  *  ⏳ M3      /api/v1/alerts|channels|silences|settings|users|audit（§4.5–§4.10）
@@ -76,6 +78,12 @@ export async function buildApp({ config, logger, db, redis, startupChecks = true
   // --- 依赖注入（供路由/服务层通过 req.server.xxx 访问）-----------------------
   app.decorate('config', config);
   app.decorate('deps', { db, redis, startupChecks });
+  /**
+   * 面板会话的挂载点（middleware/authPanel.js 写、路由读）。
+   * ⚠️ 必须**声明**装饰器：Fastify 靠它给 request 生成稳定的隐藏类，
+   *    运行时动态挂属性会退化成字典模式拖慢所有请求，且 schema/文档工具也看不到。
+   */
+  app.decorateRequest('session', null);
 
   // --- 插件 ------------------------------------------------------------------
   await app.register(cookie, {
@@ -145,6 +153,9 @@ export async function buildApp({ config, logger, db, redis, startupChecks = true
 
   // --- Agent 上报（✅ M1；唯一的上行入口，⛔ 不含任何下发路径）---------------
   await app.register(registerAgentReportRoutes);
+
+  // --- 面板认证（✅ §4.1 B4/B5：登录/me/登出/改密；⛔ 无任何向 Agent 下发的路径）---
+  await app.register(registerAuthRoutes);
 
   return app;
 }

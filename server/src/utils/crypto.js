@@ -12,10 +12,15 @@
  *     会直接吃掉上报吞吐。加 pepper 后即使数据库泄露也无法离线爆破。
  *  3. 落地加密（`channels.config` 敏感项、`users.totp_secret_enc`）→ **AES-256-GCM**，
  *     主密钥来自 env（SECRET_KEY），⛔ 永不入库；密文带 `v1:` 版本前缀以便日后轮换密钥。
+ *  4. 面板一次性恢复码（`user_recovery_codes.code_hash`）→ **HMAC-SHA256(pepper=SECRET_KEY)**：
+ *     码本身是 50 bit 随机的**在线**校验凭据（有登录限流兜底），加 pepper 后即使库被拖走也无法离线爆破；
+ *     ⛔ 不用 Argon2——恢复码恰恰用在「用户已经进不去 2FA」的时刻，不该再叠一层慢哈希延迟。
  */
 
 import crypto from 'node:crypto';
 import { Algorithm, hash as argon2Hash, verify as argon2Verify } from '@node-rs/argon2';
+
+import { normalizeRecoveryCode } from './totp.js';
 
 // -----------------------------------------------------------------------------
 // 通用随机与摘要
@@ -241,4 +246,56 @@ export function generateSessionId() {
 /** CSRF token（配合 SameSite=Lax 的双保险） */
 export function generateCsrfToken() {
   return randomToken(24);
+}
+
+// -----------------------------------------------------------------------------
+// 面板 2FA：TOTP 密钥 AAD 与一次性恢复码（docs/api.md §4.1 / §4.1.1 ⑤）
+// -----------------------------------------------------------------------------
+
+/**
+ * TOTP 密钥密文的 AAD。
+ *
+ * 🔑 与 `agentSecretAad()` 同一个理由：AAD 绑定**行身份**后，把 A 用户的密文整段搬到 B 用户的行上，
+ *    解密会直接 GCM 认证失败。否则 B 就能用 A 的种子生成"合法"验证码，而库里 `totp_enabled=true`
+ *    看起来一切正常——这类"看起来是好的"越权最难发现。
+ *
+ * ⛔ 这个字符串是**落库格式的一部分**：改动它等于让所有既有 TOTP 密文失效（已绑定用户全部被锁在 2FA 外）。
+ */
+export function totpSecretAad(userId) {
+  if (!userId) throw new Error('totpSecretAad 需要 user_id');
+  return `totp-secret:${userId}`;
+}
+
+/** 恢复码哈希的域分隔前缀（与 Agent 凭证的 `vantage:agent:<kind>:` 同一约定，避免跨用途哈希等价） */
+const RECOVERY_CODE_DOMAIN = 'vantage:recovery:';
+
+/**
+ * 恢复码哈希：HMAC-SHA256(pepper = SECRET_KEY, `vantage:recovery:<归一化码>`)。
+ *
+ * ⚠️ 归一化（去分隔符/空白、大写、按 Crockford 规则映射易混字符）**在哈希口径之内**：
+ *    用户少打一个连字符必须仍然命中同一条记录，否则码会"莫名其妙失效"。
+ * @param {string} code 用户可读形态（`XXXXX-XXXXX`）或任意大小写/带分隔符输入
+ * @param {Buffer} pepper SECRET_KEY（32 字节）
+ * @returns {string} 十六进制哈希（入库形态）
+ */
+export function hashRecoveryCode(code, pepper) {
+  if (!Buffer.isBuffer(pepper) || pepper.length !== 32) {
+    throw new Error('SECRET_KEY 必须是 32 字节 Buffer');
+  }
+  const normalized = normalizeRecoveryCode(code);
+  if (normalized.length === 0) throw new Error('恢复码为空或格式非法');
+  return crypto
+    .createHmac('sha256', pepper)
+    .update(`${RECOVERY_CODE_DOMAIN}${normalized}`, 'utf8')
+    .digest('hex');
+}
+
+/** 校验恢复码（常量时间比较）。⛔ 空码/脏输入一律 false，不抛 —— 它直接处理用户输入 */
+export function verifyRecoveryCode(code, storedHash, pepper) {
+  if (!storedHash) return false;
+  try {
+    return timingSafeEqualStr(hashRecoveryCode(code, pepper), storedHash);
+  } catch {
+    return false;
+  }
 }

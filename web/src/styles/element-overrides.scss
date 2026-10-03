@@ -1,0 +1,80 @@
+// ============================================================================
+// Element Plus 主题变量定制（✅ docs/frontend.md §2 依赖边界 / §8.2）
+// ----------------------------------------------------------------------------
+// 主题机制：沿用 Element Plus 的 `html.dark` 约定 —— 无 class = 亮色，html.dark = 暗色
+//（与 src/store/ui.ts 的 theme 偏好联动，实际切换在 src/composables/useTheme.ts）。
+//
+// ⛔ 本文件是 `el-*` 变量**唯一**的落点：组件里不要给 el-* 组件写散装配色，
+//    否则明暗两套主题会分叉。
+// ⛔ 本文件不引用 design/ 设计层的令牌（本次初始化明确要求不参考设计层）；
+//    这里的色值是骨架期的临时中性色，正式视觉层接入时整表替换。
+// ============================================================================
+
+:root {
+  --vc-canvas: #f7f8fa;
+  --vc-surface: #ffffff;
+  --vc-raised: #ffffff;
+  --vc-border: #dfe3e8;
+  --vc-text: #1f2329;
+  --vc-text-2: #5c6570;
+  --vc-accent: #2b6cb0;
+
+  // 状态语义色（✅ docs/frontend.md §8.2 已定：在线=绿 / 离线=灰 / warn=橙 /
+  // critical=红 / 漂移=黄 / Flapping=紫；⛔ 不得为美观改动，且状态不能只靠颜色表达）
+  --vc-online: #1f7a4d;
+  --vc-offline: #6b7280;
+  --vc-warn: #a35a00;
+  --vc-critical: #c02a2a;
+  --vc-drift: #8a6d00;
+  --vc-flapping: #6b3fa0;
+
+  // 布局常量（与 docs/frontend.md §8.3 断点配合使用）
+  --vc-topbar-h: 56px;
+  --vc-sidebar-w: 208px;
+  --vc-content-max: 1680px;
+}
+
+html.dark {
+  --vc-canvas: #14161a;
+  --vc-surface: #1b1f24;
+  --vc-raised: #22272e;
+  --vc-border: #333a42;
+  --vc-text: #e6e9ed;
+  --vc-text-2: #a5aeb9;
+  --vc-accent: #6ea8fe;
+
+  --vc-online: #4cb782;
+  --vc-offline: #8b939d;
+  --vc-warn: #d99a3c;
+  --vc-critical: #ef6b6b;
+  --vc-drift: #cbb44a;
+  --vc-flapping: #b18ae8;
+}
+
+// ---- Element Plus 桥接层 ----------------------------------------------------
+// 把我们的变量映射到 Element Plus 的变量名，让 el-* 组件跟随主题走。
+:root,
+html.dark {
+  --el-color-primary: var(--vc-accent);
+  --el-color-success: var(--vc-online);
+  --el-color-warning: var(--vc-warn);
+  --el-color-danger: var(--vc-critical);
+  --el-color-error: var(--vc-critical);
+  --el-color-info: var(--vc-offline);
+
+  --el-bg-color: var(--vc-surface);
+  --el-bg-color-page: var(--vc-canvas);
+  --el-bg-color-overlay: var(--vc-raised);
+  --el-text-color-primary: var(--vc-text);
+  --el-text-color-regular: var(--vc-text);
+  --el-text-color-secondary: var(--vc-text-2);
+
+  --el-border-color: var(--vc-border);
+  --el-border-color-light: var(--vc-border);
+  --el-border-color-lighter: var(--vc-border);
+  --el-fill-color-blank: var(--vc-surface);
+
+  --el-border-radius-base: 4px;
+  --el-font-size-base: 14px;
+  --el-font-size-small: 13px;
+}

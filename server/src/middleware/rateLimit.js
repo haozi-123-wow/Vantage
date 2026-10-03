@@ -81,3 +81,53 @@ export function createAgentRateLimiter({ redis, config, logger }) {
     }
   };
 }
+
+/**
+ * 创建**登录**限流的 preHandler（`ratelimit:login:<ip>`，✅ 决策 #23、§1.4）。
+ *
+ * 与 Agent 限流共用同一段「固定窗口」Lua（计数 + 仅首次设 TTL），但有两点不同：
+ *  - 维度是 **IP** 而不是 agent_id（⛔ 不能按用户名限：那会把"锁死某个账号"变成攻击手段，
+ *    也无法拦住换用户名的爆破；按 IP 才能拦住同一来源的扫描）。
+ *  - 窗口来自 `RATELIMIT_LOGIN_WINDOW_S`（默认 300s），比上报窗口长得多。
+ *
+ * ⚠️ 统一错误口径（docs/api.md §4.1）：**成功与失败都计数**。只数失败的话，
+ *    攻击者可以先用正确密码"免费"消耗掉正常流量再混入爆破；统一计数实现也更简单。
+ *    （响应 ⛔ 不区分"账号不存在/密码错"—— 限流信息里同样不能出现账号线索。）
+ *
+ * ⛔ Redis 不可用时拒绝服务（与 Agent 限流同款取舍）：登录正是要被保护的动作，
+ *    没有限流的登录等于敞开爆破；而 Redis 挂了会话也建不起来，503 是诚实的结果。
+ *
+ * @param {{ redis: import('ioredis').Redis, config: object, logger: object }} deps
+ */
+export function createLoginRateLimiter({ redis, config, logger }) {
+  const limit = config.rateLimit.loginPerWindow;
+  const windowS = config.rateLimit.loginWindowS;
+
+  return async function loginRateLimit(request, reply) {
+    const key = keys.rateLimitLogin(request.ip);
+
+    let count;
+    let ttl;
+    try {
+      [count, ttl] = await redis.eval(FIXED_WINDOW_LUA, 1, key, windowS);
+    } catch (err) {
+      logger?.error({ err, ip: request.ip }, '登录限流检查失败（Redis 不可用）');
+      throw new AppError('upstream_unavailable', { cause: err, details: { dependency: 'redis' } });
+    }
+
+    const remaining = Math.max(0, limit - count);
+    const retryAfterS = Math.max(1, Number(ttl) || windowS);
+    reply.header('X-RateLimit-Limit', String(limit));
+    reply.header('X-RateLimit-Remaining', String(remaining));
+    reply.header('X-RateLimit-Reset', String(Math.floor(Date.now() / 1000) + retryAfterS));
+
+    if (count > limit) {
+      logger?.warn({ ip: request.ip, count, limit }, '登录被限流');
+      throw new AppError('rate_limited', {
+        message: `尝试过于频繁，请稍后再试（上限 ${limit} 次 / ${windowS}s）`,
+        retryAfterS,
+        details: { limit, window_s: windowS },
+      });
+    }
+  };
+}

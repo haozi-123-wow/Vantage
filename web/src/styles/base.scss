@@ -1,0 +1,70 @@
+// ============================================================================
+// 全局基线（骨架阶段）
+// ----------------------------------------------------------------------------
+// ⛔ 本文件刻意不引用 design/ 设计层的任何令牌或样式（本次初始化明确要求不参考设计层）。
+//    这里只放：最小 reset、页面骨架类、以及从 Element Plus 桥接过来的可用变量。
+//    正式视觉层接入时，替换 element-overrides.scss 与这里的色彩变量即可，组件无需改动。
+// ============================================================================
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--vc-canvas);
+  color: var(--vc-text);
+  font-family: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+a {
+  color: var(--vc-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+// 视图骨架（占位页用）。正式视觉层接入后自行决定是否保留。
+.vc-page {
+  max-width: var(--vc-content-max);
+  margin: 0 auto;
+  padding: 20px 24px 40px;
+}
+
+.vc-page__title {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.vc-page__hint {
+  margin: 0 0 16px;
+  color: var(--vc-text-2);
+  font-size: 13px;
+}
+
+// 监控面板 90% 的字符是数字：等宽数字让列对齐、让跳动不抖
+.vc-num {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

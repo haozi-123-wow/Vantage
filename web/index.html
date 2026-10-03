@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vantage Console</title>
+    <!--
+      ⛔ 不做 PWA / 离线缓存（✅ 决策 #27）：没有 manifest、没有 service worker。
+      主题偏好必须在首屏渲染前应用，否则暗色用户会看到一次白闪（FOUC）。
+      这里的 key 与字段名要和 src/store/ui.ts 的 UI_STORAGE_KEY / theme 保持一致。
+    -->
+    <script>
+      ;(function () {
+        try {
+          var raw = localStorage.getItem('vantage.ui')
+          var pref = raw ? JSON.parse(raw).theme : 'auto'
+          var prefersDark =
+            typeof window.matchMedia === 'function' &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches
+          if (pref === 'dark' || (pref !== 'light' && prefersDark)) {
+            document.documentElement.classList.add('dark')
+          }
+        } catch (_err) {
+          // 隐私模式 / 存储被禁用：忽略，交给运行时 useTheme() 兜底
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

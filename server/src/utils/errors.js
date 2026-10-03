@@ -24,6 +24,8 @@ export const ERROR_CODES = Object.freeze({
   expr_not_allowed: { status: 400, message: '本期不接受表达式（expr 必须为 null，零 RCE 约束）' },
   unknown_setting: { status: 400, message: '未知的设置项 key（不在白名单内）' },
   invalid_setting_value: { status: 400, message: '设置项的值类型不符合该 key 的定义' },
+  // TOTP 验证码错误（docs/api.md §4.1 的 `2fa/enable` 明确要求 400 + 该 code）
+  invalid_totp: { status: 400, message: '验证码不正确，请重新输入' },
 
   // 401
   signature_invalid: { status: 401, message: '签名校验失败' },
@@ -35,6 +37,8 @@ export const ERROR_CODES = Object.freeze({
   // 403
   role_denied: { status: 403, message: '当前账号无权执行该操作' },
   totp_required: { status: 403, message: '需要完成二次验证（TOTP）' },
+  // 强制绑定策略下的受限态（docs/api.md §4.1.1 ②③）：未绑定 TOTP 且 require_2fa=true
+  totp_setup_required: { status: 403, message: '按安全策略要求，请先绑定二次验证（TOTP）' },
   csrf_invalid: { status: 403, message: 'CSRF 校验失败' },
 
   // 404

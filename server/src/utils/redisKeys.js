@@ -20,6 +20,7 @@ export const KEY_PREFIX = Object.freeze({
   batch: 'batch:',
   session: 'session:',
   userSessions: 'user_sessions:',
+  totpUsed: 'totp:used:',
   alertCooldown: 'alert:cooldown:',
   ipRecent: 'ip:recent:',
   snapshotAgent: 'snapshot:agent:',
@@ -48,6 +49,12 @@ export const TTL_S = Object.freeze({
   ipRecent: 600,
   /** 公开「当前快照」缓存（§5.4「带缓存」） */
   snapshotAgent: 15,
+  /**
+   * ✅ docs/api.md §4.1.1 ④：TOTP 步号防重放。
+   * 90s = 当前步（30s）+ 两侧容差各一步 —— 覆盖 verifyTotp 的 ±1 步窗口，
+   * 使"某步号已被接受"这一事实在它仍可能被重放的时间内始终有效。
+   */
+  totpUsed: 90,
 });
 
 export const keys = Object.freeze({
@@ -69,6 +76,8 @@ export const keys = Object.freeze({
   session: (sid) => `${KEY_PREFIX.session}${sid}`,
   /** 某用户全部会话 sid 集合（限并发、踢最旧、全部下线） */
   userSessions: (userId) => `${KEY_PREFIX.userSessions}${userId}`,
+  /** 2FA：已接受过的 TOTP 步号（同一步只允许成功一次，防止 30s 窗口内重放同一验证码） */
+  totpUsed: (userId) => `${KEY_PREFIX.totpUsed}${userId}`,
 
   /** 告警静默期 + 同类合并（规则 × 主机） */
   alertCooldown: (ruleId, agentId) => `${KEY_PREFIX.alertCooldown}${ruleId}:${agentId}`,
