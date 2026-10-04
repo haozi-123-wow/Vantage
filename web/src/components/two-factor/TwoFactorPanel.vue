@@ -18,6 +18,7 @@ import { useRouter } from 'vue-router'
 import type { RecoveryCodesResult } from '@/api/private'
 import RecoveryCodesNotice from '@/components/two-factor/RecoveryCodesNotice.vue'
 import TwoFactorBindForm from '@/components/two-factor/TwoFactorBindForm.vue'
+import TwoFactorUnbindForm from '@/components/two-factor/TwoFactorUnbindForm.vue'
 import { useAuthStore } from '@/store/auth'
 
 const { t } = useI18n()
@@ -27,6 +28,8 @@ const auth = useAuthStore()
 /** 一次性恢复码：只活在内存里，用户确认保存后立刻丢弃（⛔ 不落存储） */
 const recoveryCodes = ref<string[] | null>(null)
 const remaining = ref<number | undefined>(undefined)
+/** 刚刚自助解绑成功：给一条明确回执（面板随即回到"未绑定"态，否则用户会以为按钮没生效） */
+const unbindDone = ref(false)
 
 const restricted = computed(() => auth.status === 'totp_setup_required')
 const bound = computed(() => auth.user?.totp_enabled === true)
@@ -47,6 +50,19 @@ async function onBound(result: RecoveryCodesResult): Promise<void> {
 function onAcknowledged(): void {
   recoveryCodes.value = null
   remaining.value = undefined
+}
+
+/**
+ * 解绑成功（服务端 204，恢复码已一并作废、会话仍是完整态）。
+ * ⚠️ 必须 `refreshMe()`：`bound` 看的是 `auth.user.totp_enabled`，不刷新的话面板会一直显示"已绑定"。
+ */
+async function onUnbound(): Promise<void> {
+  unbindDone.value = true
+  try {
+    await auth.refreshMe()
+  } catch {
+    // 状态刷新失败不影响"已经解绑"这件事；下一次导航守卫会重新 bootstrap
+  }
 }
 
 async function relogin(): Promise<void> {
@@ -88,17 +104,33 @@ async function relogin(): Promise<void> {
       @acknowledged="onAcknowledged"
     />
 
-    <ElAlert
-      v-else-if="bound"
-      type="success"
-      :closable="false"
-      show-icon
-      :title="t('twoFactor.boundTitle')"
-    >
-      {{ t('twoFactor.boundHint') }}
-    </ElAlert>
+    <template v-else-if="bound">
+      <ElAlert
+        type="success"
+        :closable="false"
+        show-icon
+        :title="t('twoFactor.boundTitle')"
+      >
+        {{ t('twoFactor.boundHint') }}
+      </ElAlert>
 
-    <TwoFactorBindForm v-else @bound="onBound" />
+      <!-- 自助解绑（docs/frontend.md §4.6：解绑需**密码二次确认**）；require_2fa=true 时服务端回 409 -->
+      <TwoFactorUnbindForm @unbound="onUnbound" />
+    </template>
+
+    <template v-else>
+      <ElAlert
+        v-if="unbindDone"
+        type="info"
+        :closable="false"
+        show-icon
+        :title="t('twoFactor.unbindDoneTitle')"
+      >
+        {{ t('twoFactor.unbindDoneHint') }}
+      </ElAlert>
+
+      <TwoFactorBindForm @bound="onBound" />
+    </template>
   </section>
 </template>
 

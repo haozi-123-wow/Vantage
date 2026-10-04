@@ -14,11 +14,13 @@
  */
 import { AppError, requestJson } from '@/api/http'
 import type { QueryValue } from '@/types/http'
-import type { GeetestValidate } from '@/utils/geetest'
+import type { GeetestVerifyBody } from '@/utils/geetest'
 import type {
+  HostsResponse,
   LoginResponse,
   MeResponse,
   MetricSeries,
+  PanelSummary,
   PublicSnapshot,
 } from '@/types/domain'
 
@@ -66,6 +68,19 @@ interface CallOptions {
   skipCsrf?: boolean
 }
 
+/**
+ * 401 是否应当按「**会话失效**」处理（决定要不要清本地态 + 跳登录）。
+ *
+ * ⚠️ 401 有两种含义，⛔ 不能一律当成会话没了：
+ * - `session_expired` 等 → `true`：会话真的失效了；
+ * - `invalid_credentials` → `false`：**用户在自助表单里填错了口令**
+ *   （`/auth/login` 与 `/auth/2fa/disable` 的密码二次确认都会回它），此时会话仍然有效 ——
+ *   若按会话失效处理，用户只是打错一次密码就被踢出控制台，还会把已填的表单弄丢。
+ */
+export function isSessionExpiry(error: AppError): boolean {
+  return error.status === 401 && error.code !== 'invalid_credentials'
+}
+
 async function call<T>(path: string, options: CallOptions = {}): Promise<T> {
   if (inPublicDomain) {
     throw new AppError({
@@ -99,7 +114,8 @@ async function call<T>(path: string, options: CallOptions = {}): Promise<T> {
     })
   } catch (error) {
     if (error instanceof AppError) {
-      if (error.status === 401) hooks.onUnauthorized?.(error)
+      // ⚠️ 401 的两种含义在 `isSessionExpiry` 里分流（`invalid_credentials` = 口令填错，⛔ 不踢人下线）
+      if (isSessionExpiry(error)) hooks.onUnauthorized?.(error)
       else if (error.status === 403 && error.code === 'totp_required') hooks.onTotpRequired?.(error)
       else if (error.status === 403 && error.code === 'totp_setup_required') {
         hooks.onTotpSetupRequired?.(error)
@@ -201,11 +217,16 @@ export interface SelfbuiltCaptchaVerifyBody {
 }
 
 /**
- * `/auth/captcha/verify` 请求体 —— **极验**分支 = `captchaObj.getValidate()` 的 4 个字段。
- * ⚠️ 极验分支**刻意不收 `captcha_id`**：服务端用自己的配置值（`docs/api.md` §4.1）。
- * 类型定义跟着极验实例走（`utils/geetest.ts`），避免同一个形状在仓库里写两遍。
+ * `/auth/captcha/verify` 请求体 —— **极验**分支。
+ *
+ * ⚠️ 它**不是** `captchaObj.getValidate()` 的返回值本身：厂商返回的是客户端 `POST /verify`
+ *    响应里 `data.seccode` 的**原样对象**（2026-10-04 实测 5 个字段，多一个 `captcha_id`，
+ *    见 `utils/geetest.ts` 的 `GeetestValidate`）。本类型是**服务端白名单**那 4 个字段，
+ *    由 `toVerifyBody()` 投影得到 —— ⛔ 不要用 `getValidate()` 的返回值直接喂给本类型。
+ * ⚠️ 服务端**放行** `captcha_id`（否则"原样转发"的客户端会被 400 `schema_invalid` 挡死），
+ *    但**不读**它：出站二次校验用的是服务端配置里的 `captchaId`（`docs/api.md` §4.1）。
  */
-export type GeetestCaptchaValidate = GeetestValidate
+export type GeetestCaptchaValidate = GeetestVerifyBody
 
 /** `/auth/captcha/verify` 请求体：按提供方判别（两个分支字段完全不同，⛔ 不要混用） */
 export type CaptchaVerifyBody = SelfbuiltCaptchaVerifyBody | GeetestCaptchaValidate
@@ -294,6 +315,17 @@ export const authApi = {
   twoFactorEnable: (code: string) =>
     call<RecoveryCodesResult>('/auth/2fa/enable', { method: 'POST', body: { code } }),
 
+  /**
+   * 解绑 2FA：**密码二次确认**（docs/api.md §4.1 B6 / docs/frontend.md §4.6）。
+   *
+   * - 成功 = **204**：解绑 **且恢复码整批作废**（D5）；⛔ 不轮换 sid、不动会话（仍是完整态）。
+   * - 密码错 → 401 `invalid_credentials`（⚠️ 是"口令填错"，不是会话过期，见 `call()` 里的分流）。
+   * - 未绑定 / `security.require_2fa=true` 时**禁止自助解绑** → 409 `conflict`（D3，服务端 message 已说明原因）。
+   * ⚠️ 调用方成功后必须重取 `me`（`user.totp_enabled` 变了）。
+   */
+  twoFactorDisable: (password: string) =>
+    call<void>('/auth/2fa/disable', { method: 'POST', body: { password } }),
+
   logout: () => call<void>('/auth/logout', { method: 'POST' }),
 
   logoutAll: () => call<void>('/auth/logout-all', { method: 'POST' }),
@@ -321,47 +353,163 @@ export interface HostMetricsResponse {
   series: MetricSeries[]
 }
 
+/**
+ * 私有主机条目（docs/api.md §4.2；`GET /api/v1/hosts` 已落地，其余子端点仍是 ⏳）。
+ * ⚠️ 与 `PublicHost` 共用同一张 `HostTable`（docs/frontend.md §4.3），故公开字段一并保留。
+ */
 export interface HostListItem {
   id: string
+  /** 公开标识（同一台机在公开页用 slug，面板可交叉对照） */
+  slug: string
   name: string
   display_name?: string | null
   tags?: string[]
-  status: string
+  status: 'online' | 'offline' | 'disabled'
   os?: string | null
   arch?: string | null
-  last_seen_at?: string | null
+  uptime?: number | null
+  /** 相对化文案；`disabled` 或从未上报时为 null */
+  last_seen_ago: string | null
+  /** ⚠️ 私有侧是**精确值**（公开侧才做分钟级取整） */
+  last_seen_at: string | null
   last_ip?: string | null
   reported_ip?: string | null
+  /** 符号口径：**负值 = Agent 慢** */
   clock_drift_ms?: number | null
   ip_flapping?: boolean
+  flapping_since?: string | null
   active_alerts?: number
   snapshot?: Partial<PublicSnapshot>
+  probes?: { up: number; down: number }
+}
+
+/**
+ * `GET /api/v1/hosts/{id}` —— 单机详情（列表条目 + 三个纵深字段）。
+ * ⚠️ `current_metrics` 的键是**指标全名**（含维度，如 `disk.used_pct{mount=/data}`）——
+ *    私有域给原名（运维排障要用），⛔ 公开侧走的是泛化标签（`PublicHostNow`）。
+ */
+export interface HostDetail extends HostListItem {
+  host_info?: Record<string, unknown> | null
+  capabilities?: Record<string, unknown> | null
+  current_metrics: Record<string, number | null>
+  updated_at: string
+}
+
+/** 一次探活结果（历史时间条上的一个点） */
+export interface ProbeResult {
+  checked_at: string | null
+  up: boolean
+  latency_ms: number | null
+  status_code: number | null
+  error: string | null
+}
+
+/** 某个 probe 的历史（`GET /api/v1/hosts/{id}/probes`） */
+export interface ProbeHistoryItem {
+  name: string
+  type: string
+  target: string
+  availability: {
+    total: number
+    up: number
+    down: number
+    /** ⚠️ 按**整个窗口**算；窗口内无探活时为 null（⛔ 不是 1） */
+    ratio: number | null
+    window_from: string | null
+    window_to: string | null
+  }
+  latest: ProbeResult | null
+  /** 按时间**倒序**（最近的在最前） */
+  results: ProbeResult[]
+  /** 该 probe 的点数被上限截断（可用率仍是整窗口的） */
+  truncated: boolean
+}
+
+export interface HostProbeHistory {
+  host_id: string
+  from: string
+  to: string
+  truncated: boolean
+  items: ProbeHistoryItem[]
+  updated_at: string
+}
+
+/** IP 出现区间与变化事件（`GET /api/v1/hosts/{id}/ip-history`） */
+export interface HostIpHistory {
+  host_id: string
+  current_ip: string | null
+  reported_ip: string | null
+  ip_flapping: boolean
+  flapping_since: string | null
+  intervals: Array<{ ip: string; source: string; first_seen: string | null; last_seen: string | null }>
+  events: Array<{
+    old_ip: string | null
+    new_ip: string
+    same_subnet: boolean | null
+    changed_at: string | null
+    source: string | null
+    kind: string
+    change_count: number | null
+    subnet_prev: string | null
+    subnet_next: string | null
+  }>
+  updated_at: string
+}
+
+/** 进程快照（`GET /api/v1/hosts/{id}/processes`）—— 三者同时为 null = 该时刻没有采集 */
+export interface HostProcessSnapshot {
+  host_id: string
+  at: string | null
+  total: number | null
+  top: Array<Record<string, unknown>> | null
+  updated_at: string
 }
 
 export const hostsApi = {
+  /**
+   * `GET /api/v1/hosts`。⚠️ 2026-10-04 契约修正：返回 `{ items, next_cursor, updated_at }`。
+   * `cursor` 本期被服务端**忽略**（无真游标），`next_cursor` 恒为 null。
+   */
   list: (query?: {
     status?: 'online' | 'offline' | 'disabled'
     tag?: string
     q?: string
     limit?: number
     cursor?: string
-  }) => call<HostListItem[]>('/hosts', { query }),
+  }) => call<HostsResponse<HostListItem>>('/hosts', { query }),
 
-  get: (id: string) => call<Record<string, unknown>>(`/hosts/${encodeURIComponent(id)}`),
+  /**
+   * `GET /api/v1/summary` —— 面板汇总计数。
+   * ⚠️ 列表页顶栏**不要**靠"数 `list()` 返回的条数"得出总数：`limit` 一截断就是错的。
+   */
+  summary: () => call<PanelSummary>('/summary'),
+
+  /** `GET /api/v1/hosts/{id}` —— 单机详情（含 `current_metrics` 全序列当前值） */
+  get: (id: string) => call<HostDetail>(`/hosts/${encodeURIComponent(id)}`),
 
   metrics: (id: string, query: HostMetricsQuery) =>
     call<HostMetricsResponse>(`/hosts/${encodeURIComponent(id)}/metrics`, {
       query: { ...query, metrics: query.metrics.join(',') },
     }),
 
+  /**
+   * `GET /api/v1/hosts/{id}/probes` —— 探活历史。
+   * ⚠️ `from`/`to` 必须是 RFC3339（含时区）或 unix 毫秒；⛔ 不带时区的裸时间串会被服务端拒掉（400），
+   *    默认窗口 = 最近 24 小时，最大跨度 30 天（超出 → 400 `range_too_large`）。
+   */
   probes: (id: string, query?: { from?: string | number; to?: string | number; name?: string; type?: string }) =>
-    call<Record<string, unknown>>(`/hosts/${encodeURIComponent(id)}/probes`, { query }),
+    call<HostProbeHistory>(`/hosts/${encodeURIComponent(id)}/probes`, { query }),
 
-  ipHistory: (id: string, query?: { from?: string | number; to?: string | number }) =>
-    call<Record<string, unknown>>(`/hosts/${encodeURIComponent(id)}/ip-history`, { query }),
+  /** `GET /api/v1/hosts/{id}/ip-history` —— IP 区间 + 变化/Flapping 事件 */
+  ipHistory: (id: string, query?: { limit?: number }) =>
+    call<HostIpHistory>(`/hosts/${encodeURIComponent(id)}/ip-history`, { query }),
 
+  /**
+   * `GET /api/v1/hosts/{id}/processes` —— 进程 Top。
+   * `at` 省略时取最近一条；给定时取**该时刻之前**最近的一条（⛔ 不是"恰好等于"）。
+   */
   processes: (id: string, query?: { at?: number | string }) =>
-    call<Record<string, unknown>>(`/hosts/${encodeURIComponent(id)}/processes`, { query }),
+    call<HostProcessSnapshot>(`/hosts/${encodeURIComponent(id)}/processes`, { query }),
 }
 
 // ---- 告警事件 / 审计 / 设置（docs/api.md §4.6 / §4.8 / §4.10）-------------
@@ -391,4 +539,63 @@ export const settingsApi = {
   patch: (body: Record<string, unknown>) => call<void>('/settings', { method: 'PATCH', body }),
 }
 
-export const privateApi = { auth: authApi, hosts: hostsApi, alerts: alertsApi, audit: auditApi, settings: settingsApi }
+// ---- Agent 与凭证管理（docs/api.md §4.4）----------------------------------
+
+/**
+ * 一键安装提示（`POST /api/v1/agents` 的 201 响应里）。
+ * ⚠️ 契约初稿把 `install_hint` 写成 `string`，但前端要**分三段展示** + 一条风险提示，已改为对象
+ * （见 `docs/api.md` §4.4；同步记录在 `docs/api-status.md` §4.7）。
+ * ⚠️ 未配置 `AGENT_INSTALL_SCRIPT_URL` 时 `script_url`/三个命令字段**全为 `null`**：
+ *    此时**不要**渲染复制按钮，改为展示 `warnings[].message`（⛔ 后端不会给带占位符的假命令）。
+ */
+export interface AgentInstallHint {
+  /** `--center` 用的中心地址（后端取 `PUBLIC_ORIGIN`，未配置时按当前请求推导） */
+  center_url: string
+  script_url: string | null
+  /** 形式①：带 `VANTAGE_KEY`/`VANTAGE_SECRET` 的一键命令（⚠️ 含明文凭证，仅此一次） */
+  one_liner: string | null
+  /** 形式②：交互式 / stdin（最安全，⛔ 不含凭证） */
+  interactive: string | null
+  /** 形式③：凭证落在 0600 文件里（长期方案，⛔ 不含凭证） */
+  key_file: string | null
+  /** 风险提示（history / `/proc/$PID/environ`）——面板**必须**展示 */
+  security_note: string
+  warnings: Array<{ code: string; message: string }>
+}
+
+/**
+ * `POST /api/v1/agents` 的 201 响应。
+ * ⛔ `agent_key` / `agent_secret` 是**明文且仅此一次**：离开该页面后中心再也取不回
+ * （库里只有不可逆哈希与密文），故 UI 必须强提示"仅显示一次"并提供复制。
+ */
+export interface CreatedAgent {
+  id: string
+  name: string
+  display_name: string | null
+  tags: string[]
+  public_slug: string
+  /** ⚠️ 这是**连接状态**（新机恒为 `offline`），不是凭证生命周期 */
+  status: 'online' | 'offline' | 'disabled'
+  created_at: string
+  agent_key: string
+  agent_secret: string
+  install_hint: AgentInstallHint
+}
+
+export const agentsApi = {
+  /**
+   * 添加 Agent（仅 `admin`；需完整态会话 + CSRF，由客户端自动注入）。
+   * ⚠️ 重名 → 409 `already_exists`（`details.field === 'name'`），前端应把错误挂在"名称"输入框上。
+   */
+  create: (body: { name: string; display_name?: string; tags?: string[] }) =>
+    call<CreatedAgent>('/agents', { method: 'POST', body }),
+}
+
+export const privateApi = {
+  auth: authApi,
+  hosts: hostsApi,
+  agents: agentsApi,
+  alerts: alertsApi,
+  audit: auditApi,
+  settings: settingsApi,
+}

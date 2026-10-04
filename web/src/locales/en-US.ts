@@ -104,6 +104,15 @@ export default {
     boundTitle: '2FA is bound',
     boundHint:
       'Sign-in requires the 6-digit code from your authenticator. If the device is lost, use a recovery code or ask an administrator to reset 2FA.',
+    unbindStart: 'Unbind two-factor',
+    unbindHint:
+      'After unbinding, signing in only requires your password, which lowers account security. Enter your current password to confirm.',
+    unbindPasswordLabel: 'Current password',
+    unbindConfirm: 'Confirm unbind',
+    unbindMissingPassword: 'Enter your current password.',
+    unbindDoneTitle: 'Two-factor unbinding complete',
+    unbindDoneHint:
+      'Recovery codes were revoked as well and sign-in no longer asks for a code. You can bind a new device below at any time.',
     recoveryTitle: 'Save these 10 recovery codes now',
     recoveryHint:
       'Each recovery code works only once; you cannot view them again after leaving this page (they are your way back in if the device is lost).',

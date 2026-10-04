@@ -103,6 +103,13 @@ export default {
     boundTitle: '已绑定二次验证',
     boundHint:
       '登录时需要输入验证器上的 6 位验证码。丢失设备时可用恢复码登录，或由管理员重置二次验证。',
+    unbindStart: '解绑二次验证',
+    unbindHint: '解绑后登录只需密码，账号安全性会下降。请输入当前密码确认。',
+    unbindPasswordLabel: '当前密码',
+    unbindConfirm: '确认解绑',
+    unbindMissingPassword: '请输入当前密码。',
+    unbindDoneTitle: '已解绑二次验证',
+    unbindDoneHint: '恢复码已一并作废，登录将不再要求验证码。你可以随时在下方重新绑定。',
     recoveryTitle: '请立即保存这 10 个恢复码',
     recoveryHint: '每个恢复码只能使用一次；离开本页后无法再次查看（丢失设备时靠它登录）。',
     recoveryCount: '剩余可用：{count} 个',

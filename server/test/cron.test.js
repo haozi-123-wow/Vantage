@@ -486,24 +486,26 @@ test('nextDailyAt：今天未到点 → 今天；已过点 → 明天（UTC 计�
   assert.equal(nextDailyAt(t('2026-09-26T01:00:00Z'), 3, 10), t('2026-09-26T03:10:00Z'));
 });
 
-test('cron：本服务实现的任务必须是 CRON_TASKS 的子集（其余留给 M3：离线判定/Flapping 恢复/轮换提醒）', () => {
+test('cron：本服务实现的任务必须是 CRON_TASKS 的子集（其余留给 M3：Flapping 恢复/轮换提醒）', () => {
   const cron = createCronService({ db: makeDb(), redis: createFakeRedis(), config: CONFIG, logger: silentLogger });
   const registered = new Set(Object.values(CRON_TASKS));
 
   for (const name of cron.taskNames) {
     assert.ok(registered.has(name), `${name} 不在 redisKeys.js 的 CRON_TASKS 里（键名会分叉）`);
   }
-  // 已经实现的六项
+  // 已经实现的七项（offline_sweep 与状态接口同批落地：机器掉线时没有任何请求进来，
+  // 不主动点名的话 agents.status 会永远停在 online —— 详见 services/offline.service.js 文件头）
   assert.deepEqual([...cron.taskNames].sort(), [
     CRON_TASKS.aggregate1m,
     CRON_TASKS.aggregate5m,
     CRON_TASKS.createPartitions,
     CRON_TASKS.dropPartitions,
+    CRON_TASKS.offlineSweep,
     CRON_TASKS.purgeDownsampled,
     CRON_TASKS.purgeNonTimeSeries,
   ].sort());
-  // 尚未实现的三项必须仍然登记在键空间契约里（M3 要用，⛔ 别顺手删掉）
-  for (const pending of [CRON_TASKS.offlineSweep, CRON_TASKS.flappingRecover, CRON_TASKS.credentialRotateReminder]) {
+  // 尚未实现的两项必须仍然登记在键空间契约里（M3 要用，⛔ 别顺手删掉）
+  for (const pending of [CRON_TASKS.flappingRecover, CRON_TASKS.credentialRotateReminder]) {
     assert.ok(registered.has(pending));
     assert.equal(cron.taskNames.includes(pending), false, `${pending} 属 M3，本阶段不应注册`);
   }
@@ -511,14 +513,14 @@ test('cron：本服务实现的任务必须是 CRON_TASKS 的子集（其余留�
 
 test('cron：多实例只跑一份 —— 锁被别人持有 → 本次跳过且不执行业务', async () => {
   const redis = createFakeRedis();
-  let ran = 0;
   const cron = createCronService({ db: makeDb(), redis, config: CONFIG, logger: silentLogger });
   // 预占锁（模拟另一个实例正在跑）
   redis.seed(keys.cronLock(CRON_TASKS.createPartitions), 'other-instance');
 
   const result = await cron.runTask(CRON_TASKS.createPartitions);
   assert.equal(result.skipped, true);
-  assert.equal(ran, 0);
+  // 被跳过时不得有任何业务副作用：建分区走 DDL 池，这里记一笔就能证明没被执行
+  assert.equal(redis.has(keys.cronLock(CRON_TASKS.createPartitions)), true, '别人的锁不能被我们释放');
 });
 
 test('cron：Redis 不可用时 **fail-open**（照跑不误），因为任务幂等而 fail-closed 会丢数据', async () => {

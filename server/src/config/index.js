@@ -230,6 +230,25 @@ export function loadConfig(env = process.env, options = {}) {
     }),
   };
 
+  // --- Agent 安装引导（`POST /api/v1/agents` 的 `install_hint` 用）-------------
+  /**
+   * `vantage.sh` 的下载地址（GitHub Release 或内网镜像，见 `docs/agent.md` §12.1）。
+   *
+   * ⚠️ **未配置时面板不给安装命令**（`install_hint.one_liner` 等返回 `null` + 一条 warning），
+   *    ⛔ 绝不返回带 `<mirror>` 占位符的假命令 —— 一条会 `curl` 到错误地址、
+   *    还被 `sudo sh` 执行的命令，比"没有命令"危险得多（后者用户会来问，前者不会）。
+   * ⚠️ 只接受 `https://`：这段命令是 `curl … | sudo sh` 的形态，
+   *    http 镜像等于把「以 root 执行远端脚本」暴露在链路上（与 center.url 强制 https 同一条理由）。
+   */
+  const agentInstallScriptUrl = str('AGENT_INSTALL_SCRIPT_URL', { def: '' });
+  if (agentInstallScriptUrl !== '' && !/^https:\/\/[^\s]+$/.test(agentInstallScriptUrl)) {
+    errors.push(
+      `AGENT_INSTALL_SCRIPT_URL 必须是 https:// 开头的完整地址（当前 ${JSON.stringify(agentInstallScriptUrl)}）：` +
+        '该地址会被拼进 `curl … | sudo sh` 的一键安装命令，http 或相对路径都不安全',
+    );
+  }
+  const agentInstall = { scriptUrl: agentInstallScriptUrl };
+
   // --- PostgreSQL ------------------------------------------------------------
   const databaseUrl = pgUrl('DATABASE_URL', str('DATABASE_URL', { def: '' }), errors, { required: true });
   const migratorDatabaseUrl =
@@ -410,6 +429,15 @@ export function loadConfig(env = process.env, options = {}) {
   const rateLimit = {
     agentPerMinute: int('RATELIMIT_AGENT_PER_MINUTE', { def: 60, min: 1 }),
     publicPerMinute: int('RATELIMIT_PUBLIC_PER_MINUTE', { def: 60, min: 1 }),
+    /**
+     * 公开接口的**响应级**缓存 TTL（秒）；`0` = 关闭缓存。
+     * ✅ docs/server-status-api.md §2.4（决策 D4）：缓存的是**已脱敏的整个响应体**
+     *    （键 `snapshot:public:hosts` / `snapshot:public:summary`），⛔ 不是每机快照 ——
+     *    列表端点按机缓存会退化成 N 次读取，而 `snapshot:agent:<id>` 至今没有写入方。
+     * ⚠️ 默认 10s 的取舍：落在 docs/api.md §3.2 要求的 5–15s 区间内，且与 Agent 30s 上报周期同量级
+     *    ——缓存比上报周期还长就只是在显示更旧的数据，比这更短则等于没有缓存（每个访客各打一次库）。
+     */
+    publicCacheTtlS: int('PUBLIC_CACHE_TTL_S', { def: 10, min: 0, max: 60 }),
     loginPerWindow: int('RATELIMIT_LOGIN_PER_WINDOW', { def: 10, min: 1 }),
     loginWindowS: int('RATELIMIT_LOGIN_WINDOW_S', { def: 300, min: 30 }),
     /** 滑块取题/验题按 IP（✅ docs/api.md §1.4：独立桶，比登录桶宽松——"换一张图"是正常操作） */
@@ -438,9 +466,13 @@ export function loadConfig(env = process.env, options = {}) {
   }
 
   // --- 心跳与离线判定（✅ §5.3）---------------------------------------------
+  // ⚠️ sweepIntervalS 默认 **60s**（原 30s）：与 Agent 的上报周期 30s / 心跳周期 60s 同量级即可
+  //    —— 扫描比上报还勤并不带来任何精度（判定读的是 last_seen_at，不依赖扫描次数），
+  //    只是白烧 CPU 与 PG 往返。60s 扫描 + 90s 阈值 ⇒ 最坏检出延迟 150s（离线告警可接受）。
+  //    ⛔ 别把它调到「大于阈值」：那会让判定精度被扫描周期主导（阈值 90s、扫描 180s ⇒ 最坏 270s）。
   const heartbeat = {
     offlineMultiplier: int('OFFLINE_CYCLES_MULTIPLIER', { def: 3, min: 2, max: 20 }),
-    sweepIntervalS: int('HEARTBEAT_SWEEP_INTERVAL_S', { def: 30, min: 5, max: 300 }),
+    sweepIntervalS: int('HEARTBEAT_SWEEP_INTERVAL_S', { def: 60, min: 5, max: 300 }),
   };
 
   // --- IP 变化防抖 / Flapping（✅ 决策 #39、§8）-----------------------------
@@ -507,6 +539,7 @@ export function loadConfig(env = process.env, options = {}) {
       captcha: Object.freeze({ ...security.captcha, geetest: Object.freeze(security.captcha.geetest) }),
     }),
     rateLimit: Object.freeze(rateLimit),
+    agentInstall: Object.freeze(agentInstall),
     retention: Object.freeze(retention),
     heartbeat: Object.freeze(heartbeat),
     flapping: Object.freeze(flapping),

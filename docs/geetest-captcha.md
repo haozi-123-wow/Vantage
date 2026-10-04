@@ -94,12 +94,13 @@
 1. **首次登录永远不要求人机验证**：新部署、失败计数为 0 时，不带任何验证参数也能登录成功。（这是原需求的核心断言。）
 2. **出现密码错误后才引入**：同 IP 或同账号的失败计数 ≥ `security.login_captcha.after_failures`（默认 1）→ 该窗口（`loginWindowS`，默认 300s）内的后续登录**必须**携带有效验证凭证。
 3. **两层计数都要**：`login:fail:ip:<ip>` 拦连续尝试；`login:fail:acct:<sha256(用户名)[:16]>` 拦「代理池每 IP 只试一次」的分布式喷洒。⛔ 少了按账号维度，那套攻击下计数器永远是 0。
-4. **闸门在验密之前**：顺序固定为 ① 登录限流 → ② 读策略与计数 → ③ 校验人机验证凭证 → ④ 查库 + Argon2 → ⑤ 失败则计数 +1 并回 `details.captcha_required` → ⑥ 成功才消费凭证。
+4. **闸门在验密之前**：顺序固定为 ① 登录限流 → ② 读策略与计数 → ③ 校验人机验证凭证 → ④ 查库 + Argon2 → ⑤ 失败则计数 +1 并回 `details.captcha_required` → ⑥ 成功则**清零两个计数** + 消费凭证。
    🔑 ③ 必须在 ④ 之前：否则攻击者不必过验证就能让服务端每次跑满 19MiB 的 Argon2，等于白送一个 DoS 放大器。
 5. **触发器不查库**：② 的判定只用 IP / 提交的用户名 + 设置项。否则会引入「账号是否存在」的计时侧信道，破坏三种登录失败同码同文同耗时的既有不变量。
 6. **凭证绑定来源 IP**，且**登录成功时才消费**（失败不消费）——用户划过一次后打错密码不必重滑。
 7. **策略与三态正交**：它只决定「这次登录能不能进入验密环节」，⛔ 不改变 `full`/`totp_pending`/`setup_required` 的判定。
 8. **总开关 `security.login_captcha.enabled=false`** 时整条链路不生效：取题端点 **404 `not_found`**（⛔ 不用 403，免得暴露「有这东西但被关了」），登录响应与未接入验证码时**逐字节相同**。
+9. **登录成功后清零两个失败计数**（✅ 2026-10-04 Owner 决策 A，原 C8「成功不重置」已作废）：闸门在验密之前（第 4 条）而计数窗口默认 300s，若成功不清零，窗口内「错过一次密码」会让**每一次**登录都被要求验证 —— 哪怕这一次密码完全正确，用户只会看到「请先完成人机验证」。⛔ 这不削弱爆破防护：攻击者不知道密码时压根走不到清零那一步，计数照旧累积。⚠️ 连带影响：成功登录后账号**不再处于「要求验证」状态**，因此「复用已消费 token」的用例必须先重新制造一次失败才能复现（`test/auth.captcha*.test.js` 的 AC-5 / AC-G10 已按此调整）。
 
 ---
 
@@ -299,8 +300,8 @@ export function signToken(lotNumber, captchaKey) {
 
 | 项 | `provider=selfbuilt`（现状） | `provider=geetest` |
 |---|---|---|
-| 请求体 | `{captcha_id, x, y?, track}` | `{lot_number, captcha_output, pass_token, gen_time}` |
-| ⛔ 是否收 `captcha_id` | 是（题目 id） | **否**——服务端用自己的配置值。⛔ 不让客户端指定 `captcha_id`，否则等于把「用哪个验证 id」交给调用方 |
+| 请求体 | `{captcha_id, x, y?, track}` | `{lot_number, captcha_output, pass_token, gen_time}` + 可选 `captcha_id`（极验**会**带上，服务端放行但**不读**；见 §7.5 坑六） |
+| 是否收 `captcha_id` | 是（题目 id） | ➕ **收但不用**（白名单放行，出站一律用服务端配置值）。⛔ 本节原稿写的是"**否**——服务端用自己的配置值"，2026-10-04 真机实测发现极验 `getValidate()` 会带上它 → 原样转发必 400 `schema_invalid`，故改为放行但仍不读（§7.5 坑六、§16.8） |
 | 成功响应 | `{captcha_token, expires_in:120}` | **同** |
 | 失败 | 400 `captcha_invalid`，`details.reason` ∈ `mismatch`/`track_suspicious`/`expired`/`not_found`/`too_many_attempts` | 400 `captcha_invalid`，`details.reason` ∈ `validate_failed`（`details.vendor_reason` 附极验原文）/`unavailable`（503，见 C13） |
 | 审计 | `auth.captcha_failed`（`reason` + 可选 `delta_px`） | `auth.captcha_failed`（`reason` + `vendor_reason` + 可选 `vendor_code`）；⛔ **不记** `pass_token`/`captcha_output`/`lot_number` |
@@ -393,6 +394,11 @@ export function signToken(lotNumber, captchaKey) {
 **坑四**：`onClose`（用户关掉验证窗）必须提示，否则用户关闭后点登录无反应，看起来像卡死。
 
 **坑五**：`captcha_id` ⛔ **不要**写进前端构建期 env（`VITE_GEETEST_CAPTCHA_ID`）——那样每个部署都要重新构建前端产物，而 `/captcha/challenge` 已经能下发它。
+
+**坑六（2026-10-04 真机联调踩到）**：`getValidate()` 返回的**不止 4 个字段** —— 它是极验客户端 `POST https://gcaptcha4.geetest.com/verify` 响应里 `data.seccode` 的**原样对象**，实测键序 `captcha_id, lot_number, pass_token, gen_time, captcha_output`（5 个）。
+若服务端 schema 按"4 个字段 + `additionalProperties: false`"写（§6.2 原稿就是如此），前端把返回值原样转发就会 400 `schema_invalid`：请求在**进 handler 之前**被 Fastify 校验层拒掉 → 拿不到 `captcha_token` → 紧接着登录再吃 400 `captcha_required`。用户侧看到的是「极验弹窗明明通过了，却怎么都登不进去」。
+➡️ 两道都要做：① 服务端白名单**放行** `captcha_id`（但**不读**它，出站仍用配置值 + URL query）；② 前端用 `toVerifyBody()` **显式挑**那 4 个字段，⛔ 不整对象转发（厂商将来再加字段也不会重演）。
+🔑 教训：**对外部 SDK 的返回对象做严格白名单，必须同时配一条"多字段也不炸"的容错路径** —— 官方 Web API 文档只说 `getValidate()` "返回一个对象，该对象包含一些验证需要的字段"，**从未枚举**；反倒是同一页的 `onFail(failObj)` 明确写了包含 `captcha_id`。
 
 ---
 
@@ -781,3 +787,31 @@ node -e "const c=require('crypto');console.log(c.createHmac('sha256',process.arg
 3. 通过后再打错一次密码 → 应**不要求重新验证**（`captcha_token` 120s 内可复用）；若此时才提示需要验证，说明服务端把 token 消费掉了（与 §2 第 6 条不符，需回查服务端）。
 4. 把 `CAPTCHA_PROVIDER` 改成 `selfbuilt` 重启后端：登录页应回到自建滑块（前端**不用重新构建**，因为选组件是运行时按 `provider` 判定的）。
 5. 验证码关闭（`security.login_captcha.enabled=false`）时：登录页**零极验外链**、无任何验证入口。
+
+---
+
+## 17. 真机联调修复记录（2026-10-04）：`getValidate()` 多带一个 `captcha_id`
+
+> 第 16 节是 S7/S8 的落地记录；本节记的是**第一次真机登录**暴露出来的契约缺陷与修法。
+
+| 项 | 内容 |
+|---|---|
+| **现象** | 极验弹窗显示"验证通过"，但 `POST /api/v1/auth/captcha/verify` 返回 **400 `schema_invalid`**（`details[0].params.additionalProperty === 'captcha_id'`，`instancePath` 为空）；紧接着 `POST /api/v1/auth/login` 返回 400 `captcha_required` |
+| **根因** | 极验 `getValidate()` 返回的是客户端 `POST /verify` 响应里 `data.seccode` 的**原样对象**（实测 5 个字段），而 §6.2 的 schema 是"4 个字段 + `additionalProperties: false`" → 请求在 Fastify 校验层就被拒，**根本没打到极验**，`captcha_token` 从未签发。登录那个 400 是**纯下游结果**（密码错过后策略已命中、又缺凭证），不是第二个 bug |
+| **证据** | 客户端 `/verify` 响应：`data.seccode = {captcha_id, lot_number, pass_token, gen_time, captcha_output}`，与该次提交的 payload **逐字逐序相同**；服务端 `/validate` 的响应形状是另一回事（`{result, reason, captcha_args}`） |
+| **修复** | ① `server/src/routes/auth.js`：`GEETEST_VERIFY_BODY_SCHEMA` **放行** `captcha_id`（仍 `additionalProperties: false`，仍**不读**）；② `web/src/utils/geetest.ts` 新增 `toVerifyBody()` 显式投影 4 字段 + `GeetestVerifyBody` 类型，`GeetestCaptcha.vue` 改用它；③ `web/src/api/private.ts` 的 `GeetestCaptchaValidate` 改为"服务端白名单那 4 个字段"（不再是 `getValidate()` 的返回值类型） |
+| **测试** | `server/test/auth.captcha.geetest.test.js`：**AC-G5b**（带 `captcha_id` 必须 200，且它**不得**被转发给极验）＋ **AC-G5c**（其它多余字段照旧 400，白名单没放松）；`web/tests/geetest.spec.ts`（投影只产出 4 个字段，厂商新增字段同样被丢） |
+| **教训** | 见 §7.5 坑六：对外部 SDK 的返回对象做严格白名单，必须同时配一条"多字段也不炸"的容错路径 |
+
+### 17.2 决策 A（同日，Owner 拍板）：登录**成功**后清零两个失败计数
+
+| 项 | 内容 |
+|---|---|
+| **现象（Owner 实测）** | "这一次**没有输错密码**，却仍被要求人机验证"，而且错误码是后端回的 400 `captcha_required` |
+| **根因** | 闸门在**验密之前**（§2 第 4 条）＋ 计数由**上一次**密码错误写入、TTL = 登录窗口 `RATELIMIT_LOGIN_WINDOW_S`（默认 **300s**）＋ 成功**不清零**（原 §12 C8 的建议）→ 窗口内"错过一次"后，**每一次**登录（含密码完全正确的那次）都被要求验证；且因为压根没走到验密，用户看不到"密码错" |
+| **决策** | ✅ **登录成功后清零**两个计数（`login:fail:ip:*`、`login:fail:acct:*`）。⛔ 不动阈值（1）、不动窗口（300s）、不动闸门顺序（验密前） |
+| **实现** | `captcha.service.js` 新增 `clearLoginFailures({ip, username})`（一条 `DEL`，失败只告警不抛）；`auth.service.js` 的 `login()` 在**失败分支之后**调用 —— 即密码已验对时（无论随后是完整登录还是去过第二步） |
+| **理由 / 为什么安全** | 清零只在**密码被证明正确**之后发生；不知道密码的攻击者走不到这一步，失败计数照旧累积 → 爆破/撞库防护不变。反过来，不清零会让"本窗口内每次登录都要滑一次"成为常态，而它拦的人正是**已经知道密码的本人** |
+| **连带调整** | AC-5（自建）与 AC-G10（极验）「复用已消费 token → 400」：成功登录后账号已**不再处于要求验证的状态**，旧 token 根本不参与判定（200 属正常）→ 用例改为**先再制造一次失败**把闸门立起来，再断言 400 `captcha_invalid(expired)` |
+| **新增用例** | AC-G13（`test/auth.captcha.geetest.test.js`）：错一次 → 计数各 1 → 缺凭证 400 → 走完验证登录成功 → **两个计数为 null** → 再登录（不带任何验证参数）**必须 200 且不打极验** |
+| **文档同步** | `docs/api.md` §4.1 人机验证行、`docs/database.md` §7 两个 `login:fail:*` 行、`docs/slider-captcha-selfbuilt.md` §12 C8（原建议作废）、本文 §2 第 9 条 |

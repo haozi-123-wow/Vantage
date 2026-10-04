@@ -114,6 +114,8 @@ web/
 
 ### 4.1 `PublicStatus.vue` — 免登录总览（✅ §5.4、决策 #10/#21）
 
+> ✅ **后端已就绪（2026-10-04）**：本页要的三个接口全部落地 —— `GET /api/public/summary`（顶栏）、`/api/public/hosts`（卡片网格）、`/api/public/hosts/{slug}/now`（就地展开）、`/api/public/probes`（探活概览）。仍缺的是 `/ws/public`（实时更新），**可先按 15–30s 轮询**（轮询用的 REST 已可用）。前端类型已声明：`web/src/api/public.ts` + `types/domain.ts`。
+
 | 区块 | 内容 |
 |---|---|
 | 顶部汇总 | 在线数 / 离线数 / 告警数（`GET /api/public/summary`），全部为**当前值** |
@@ -147,6 +149,8 @@ web/
 
 ### 4.3 `HostList.vue` — 主机列表（✅ §5.4 需登录）
 
+> ✅ **后端已就绪（2026-10-04）**：`GET /api/v1/hosts`（列表，含过滤/排序/limit）+ `GET /api/v1/summary`（顶栏计数，⛔ **不要**用列表条数自己数）+ `GET /api/v1/hosts/{id}`（进详情）。⚠️ `next_cursor` 本期恒为 `null`（无真游标），前端按"有值才翻页"处理即可。仍缺 `/ws/live`（可先轮询）。
+
 | 模块 | 说明 |
 |---|---|
 | 过滤/搜索 | 状态（在线/离线/禁用）、标签、名称关键字 |
@@ -156,6 +160,9 @@ web/
 | 排序/分页 | 默认按「有问题优先」（离线/告警 > 在线）；支持按名称/CPU 排序；cursor 分页（`docs/api.md` §1.2） |
 
 ### 4.4 `HostDetail.vue` — 主机详情（✅ §1.1、§5.4、§8、§18）
+
+> ✅ **后端已就绪（2026-10-04），只差历史曲线**：头部 + 当前快照 → `GET /api/v1/hosts/{id}`（`current_metrics` 给**全部序列的当前值**，键是指标全名，含 `mount=/data`）；探活历史 → `/hosts/{id}/probes`（按 probe 分组，`availability.ratio` 是**整窗口**可用率）；IP 时间线 → `/hosts/{id}/ip-history`；进程 Top → `/hosts/{id}/processes`。
+> ⏳ **仍缺**：`GET /api/v1/hosts/{id}/metrics`（历史曲线，参数待定稿）与 `GET /api/v1/alert-events?agent_id=`（该机关联告警，属 M3 告警域）。前端类型已声明：`web/src/api/private.ts` 的 `HostDetail` / `HostProbeHistory` / `HostIpHistory` / `HostProcessSnapshot`。
 
 | 区块 | 数据来源 | 要点 |
 |---|---|---|
@@ -183,6 +190,9 @@ web/
 
 ### 4.6 `Settings.vue` — 设置（✅ §5.4、§6.1、§18.1）
 
+> ✅ **Agent 管理里的「创建」已就绪（2026-10-04）**：`POST /api/v1/agents` + 前端 `agentsApi.create()`（类型见 `web/src/api/private.ts` 的 `CreatedAgent`/`AgentInstallHint`）。
+> ⚠️ 三点实现口径与本节描述要对齐：① `agent_key`/`agent_secret` **仅此一次**返回，离开页面不可再取（UI 必须强提示 + 提供复制）；② `install_hint` 是**对象**（`one_liner`/`interactive`/`key_file` 三段 + `security_note` + `warnings`）——未配置 `AGENT_INSTALL_SCRIPT_URL` 时三段均为 `null`，此时⛔ 不要渲染复制按钮，改为展示 `warnings[].message`；③ 列表 / 手动轮换 / 禁用 / 吊销仍 ⏳（要等 `GET /api/v1/agents` 的字段与"吊销语义"定稿，见 `docs/api-status.md` §4.7）。
+
 > ✅ **2026-10-03 拆分（Owner 拍板「方案 A」）**：本页只放**管理类**区块；**自助类**（二次验证、我的会话、SSO 绑定状态）移到「我的账号」页 `/account`（`Account.vue`，见 §3 路由表）。理由：本页仅 `admin` 可达，而服务端对自助类**不设 admin 门槛**（`server/src/routes/auth.js` 的 `2fa/*` 只有 `requireSession` / `requireFullSession` + `requireCsrf`，无 `requireRole`）——把自助类放在本页，会让普通用户（`role=user`）在完整态下**永远无法自助开启 2FA**；受限态被守卫特批进绑定页只是「被策略强制绑定」这一条路径，不构成自助入口。
 
 | 区块 | 内容 |
@@ -190,7 +200,7 @@ web/
 | Agent 管理 | 列表（状态/最后上报/**凭证年龄 `credential_age_days`**）；**创建** → 结果面板同时给出：① **一键安装命令（含 `VANTAGE_KEY`，复制按钮）** ② 交互式/stdin 与 `--key-file` 两种更安全形式的命令（折叠在次要位置）③ `agent_key`/`agent_secret` 明文（独立字段 + 复制按钮）；全部标注「仅显示一次，离开即不可再取」，并展示安全提示（env 形式会进 shell history、建议 `history -d` 或改用 `--key-file`）——✅ 本轮修订决策 #37，见 `docs/api.md` §4.4；**手动轮换**（✅ 本轮决策：无并存过渡，旧凭证立即失效 → 必须弹窗强提示「需立即上机替换 key 文件并 reload，否则该机将判离线」+ 主机名二次确认，返回结构与创建一致）；**禁用/启用**；**吊销** |
 | 轮换提醒 | ✅ 本轮决策：`rotate_recommended` 为真时列表打「建议轮换」徽标（附 `credential_age_days`）；**阈值取后端下发的 `rotate_policy.days`**（默认 90 天，⛔ 前端不硬编码，`notify=false` 时仅保留徽标）；顶部可显示汇总提示条「N 台主机凭证已超过建议轮换周期」 |
 | 面板账号 | ✅ 本轮决策：权限**暂时两级** `admin` / `user`；本页提供**最小集**——用户列表 + 分配 `role` + 启用/禁用 + 重置该用户 2FA（见下一行）；⛔ 本期不做改密/删除用户 UI（改密走用户自助或 DB 运维）；「新建用户」建议保留（否则无法增加管理员） |
-| 二次验证 (2FA)（→ `/account`） | ✅ 本轮决策：**面板自助绑定**——「绑定」展示 `otpauth_uri` 二维码 + secret 文本（提示一次性）+ 输入验证码确认；「解绑」需密码二次确认；展示当前状态与绑定时间；**恢复码**：绑定成功即展示 10 个一次性码（强制提示保存）、显示剩余数量、支持重新生成（旧码立即作废）；若 `security.require_2fa=true` 且账号未绑定 → 登录后强制跳「我的账号」（`/account`，受限态只能访问该页，`docs/api.md` §4.1） |
+| 二次验证 (2FA)（→ `/account`） | ✅ 本轮决策：**面板自助绑定**——「绑定」展示 `otpauth_uri` 二维码 + secret 文本（提示一次性）+ 输入验证码确认；「解绑」需密码二次确认；展示当前状态与绑定时间；**恢复码**：绑定成功即展示 10 个一次性码（强制提示保存）、显示剩余数量、支持重新生成（旧码立即作废）；若 `security.require_2fa=true` 且账号未绑定 → 登录后强制跳「我的账号」（`/account`，受限态只能访问该页，`docs/api.md` §4.1）。✅ **解绑已落地（2026-10-04）**：`components/two-factor/TwoFactorUnbindForm.vue`（危险按钮 → 就地表单 → 当前密码二次确认 → 204 后 `refreshMe()` 并回执"已解绑、恢复码一并作废"）；`require_2fa=true` 时服务端回 409，前端**原样展示服务端 message**（不换成通用"状态冲突"）；⚠️ 密码填错是 401 `invalid_credentials`，⛔ 不得当成会话失效把人踢下线（见 §9 会话失效那行） |
 | 用户 2FA 重置 | ✅ 本轮决策（恢复渠道二）：面板账号列表提供「重置该用户 2FA」按钮（仅 `admin`）——二次确认（输入用户名）→ 调 `POST /api/v1/users/{id}/2fa/reset`（清绑定 + 作废恢复码 + 踢该用户下线）；UI 须明确提示「该用户下次登录将只用密码」 |
 | 我的会话（→ `/account`） | `SessionList`：当前会话信息（创建时间/最后活动/IP/UA）+「登出全部设备」（✅ 决策 #32） |
 | SSO（占位，→ `/account`） | ➕ 预留入口：展示当前账号的 SSO 绑定状态（未绑定/已绑定 + `oidc_issuer`）；本期仅展示占位与说明，不做 OIDC 登录（✅ 本轮决策） |
@@ -322,7 +332,7 @@ web/
 | XSS | 默认文本插值；⛔ 禁用 `v-html`，除非对后端返回值做过白名单清洗（`error`/`top.name` 等字段视为不可信） |
 | 越权请求 | 公开页不得请求私有接口（网络层断言，便于测试） |
 | 敏感信息 | ⛔ 不在 URL、日志、埋点、控制台打印 key/secret/Cookie；一次性 key 展示页刷新后即消失（不缓存） |
-| 会话失效 | 任意 401 → 清理 auth store + 跳登录并保留 `redirect`；403 `totp_required` → 回到登录第二步 |
+| 会话失效 | 401 → 清理 auth store + 跳登录并保留 `redirect`；⚠️ **但 `invalid_credentials` 除外**（2026-10-04 修正）：它是"用户在自助表单里填错了口令"（`/auth/login`、`/auth/2fa/disable` 的密码二次确认），此时会话仍然有效 —— 按会话失效处理会把用户因为一次手误踢出控制台。分流实现见 `web/src/api/private.ts` 的 `isSessionExpiry()`；403 `totp_required` → 回到登录第二步 |
 | 依赖 | 锁版本；定期 `npm audit`（✅ §13） |
 
 ---

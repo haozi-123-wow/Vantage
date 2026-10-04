@@ -217,6 +217,11 @@ test('AC-5 同一 token 再次使用 → 400 captcha_invalid（已消费）', as
 
   assert.equal((await injectLogin({ username: user.username, password: PASSWORD, captchaToken: token })).statusCode, 200);
 
+  // ⚠️ 决策 A（成功登录清零失败计数）落地后，"刚成功过"的账号**不再处于要求验证的状态** ——
+  //    要复现"复用已消费的 token"，必须先把闸门重新立起来（再错一次密码）；
+  //    否则旧 token 根本不会被读取，登录会以 200 通过（那是正常行为，不是 token 被接受）。
+  await failOnce(user);
+
   const reuse = await injectLogin({ username: user.username, password: PASSWORD, captchaToken: token });
   assert.equal(reuse.statusCode, 400);
   assert.equal(reuse.json().error.code, 'captcha_invalid');

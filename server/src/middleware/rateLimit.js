@@ -173,3 +173,52 @@ export function createCaptchaRateLimiter({ redis, config, logger }) {
     }
   };
 }
+
+/**
+ * 创建**公开接口**限流的 preHandler（`ratelimit:public:<ip>`，✅ docs/api.md §1.4/§3.2、方案 §7.1）。
+ *
+ * 🔑 为什么公开视图（默认开启）**必须**配套严格限流：它是全站唯一「匿名可打」的读端点，
+ *    内容虽然脱敏，但"主机数与在线状态"本身就是情报（可推断业务规模与故障窗口）。
+ *    ⛔ 本限流器与上面三个桶**完全独立**：公开页被刷爆不得影响 Agent 上报，反之亦然。
+ *
+ * ⚠️ 与滑块桶的差异只有两处：桶名、阈值（`RATELIMIT_PUBLIC_PER_MINUTE`，默认 60/min）。
+ *    ⛔ 不要为了"省一段代码"把它和 `ratelimit:login` 合并 —— 匿名访客刷公开页会把
+ *    同一 IP 后面**所有运维**的登录额度一起吃掉（这正是 `docs/api.md` §1.4 的现有取舍）。
+ *
+ * ⛔ Redis 不可用时拒绝服务（与本文件其它限流器同款取舍）：没有限流的公开端点，
+ *    配上"默认开启"，等于把一个可被无限抓取的拓扑快照放到公网上。
+ *
+ * @param {{ redis: import('ioredis').Redis, config: object, logger: object }} deps
+ */
+export function createPublicRateLimiter({ redis, config, logger }) {
+  const limit = config.rateLimit.publicPerMinute;
+  const windowS = 60;
+
+  return async function publicRateLimit(request, reply) {
+    const key = keys.rateLimitPublic(request.ip);
+
+    let count;
+    let ttl;
+    try {
+      [count, ttl] = await redis.eval(FIXED_WINDOW_LUA, 1, key, windowS);
+    } catch (err) {
+      logger?.error({ err, ip: request.ip }, '公开接口限流检查失败（Redis 不可用）');
+      throw new AppError('upstream_unavailable', { cause: err, details: { dependency: 'redis' } });
+    }
+
+    const remaining = Math.max(0, limit - count);
+    const retryAfterS = Math.max(1, Number(ttl) || windowS);
+    reply.header('X-RateLimit-Limit', String(limit));
+    reply.header('X-RateLimit-Remaining', String(remaining));
+    reply.header('X-RateLimit-Reset', String(Math.floor(Date.now() / 1000) + retryAfterS));
+
+    if (count > limit) {
+      logger?.warn({ ip: request.ip, count, limit }, '公开接口被限流');
+      throw new AppError('rate_limited', {
+        message: `请求过于频繁，请稍后再试（上限 ${limit} 次 / ${windowS}s）`,
+        retryAfterS,
+        details: { limit, window_s: windowS },
+      });
+    }
+  };
+}

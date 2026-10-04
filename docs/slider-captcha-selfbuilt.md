@@ -8,7 +8,7 @@
 > 📝 **2026-10-03 前端 S8 落地**：`Login.vue` 现在按 `/auth/captcha/challenge` 响应里的 `provider` **运行时选组件**（`geetest` → `GeetestCaptcha.vue`，`selfbuilt` → 本方案的 `SliderCaptcha.vue`）。⚠️ 对本组件是**最小改动**：题目类型收窄为 `SelfbuiltCaptchaChallenge`、`reasonOf` 改为共享实现；**交互、emit 契约与行为零变化**（`CAPTCHA_PROVIDER=selfbuilt` 时与 S3 完全一致）。
 > **本文哪些部分在 `provider=geetest` 下继续有效**：§2（触发语义与登录检查顺序，⛔ 8 条契约一条都不改）、§5.3（登录端点改动）、§6.4（token 绑定与消费时机）、§8.2（两个 settings 项）、§10.3 的 **AC-1/2/3/5/11/12/13**（提供方无关）。
 > **哪些只在 `provider=selfbuilt` 下适用**：§4.1 的 `captcha:<id>` 题目键、§6（出题与判定算法）、§7.3（`bind`/滑块交互口径被极验方案取代）、AC-4/6/7/8/9/10。
-> ❓ 待追认项见 §12：本轮**已按本文建议实现**（阈值 1、按账号维度计数、成功后不重置、token 绑定 IP、程序化 SVG 底图），如与 Owner 判断不同请按 §12 回退。
+> ❓ 待追认项见 §12：本轮**已按本文建议实现**（阈值 1、按账号维度计数、token 绑定 IP、程序化 SVG 底图）；⚠️ **唯一被推翻的是 C8**——2026-10-04 Owner 决策 A：登录**成功后清零**两个失败计数（原建议"成功不重置"已作废，理由与连带影响见 `docs/geetest-captcha.md` §2 第 9 条）。
 
 ---
 
@@ -397,7 +397,7 @@ requireCaptcha =
 |---|---|---|---|
 | **C6** | **是否同时按账号维度记失败**（防代理池每个 IP 一次免费尝试绕过滑块） | **是**（不加则分布式喷洒基本绕过本策略） | 🔶 **已按建议实现**（`login:fail:acct:<hash>`），待追认 |
 | C7 | 阈值默认值 | **1**（一次密码错即要求，符合本轮需求原话）；可配 1–10 | 🔶 已按建议实现（默认 1 + `getSettingInt` 夹取），待追认 |
-| C8 | 成功登录后是否重置失败计数 | **不重置**（简单、无绕过面）；代价：本窗口内后续登录仍需滑块 | 🔶 已按建议实现（不重置），待追认 |
+| C8 | 成功登录后是否重置失败计数 | **原建议：不重置**（简单、无绕过面）；代价：本窗口内后续登录仍需滑块 | ✅ **2026-10-04 Owner 决策 A 推翻原建议 → 成功登录后清零**。理由：闸门在验密之前（`auth.service.js` 的 `login()`），不清零会让窗口内"错过一次"的账号**每次**登录都被要求验证，哪怕密码这次是对的（用户看不到"密码错"，只看到"请先完成人机验证"）。实现：`captcha.service.js` 的 `clearLoginFailures()`，登录验密通过后一条 `DEL`；⛔ 不削弱爆破防护（不知道密码就走不到清零那一步）。连带：AC-5 / AC-G10「复用已消费 token」用例需先重新制造一次失败 |
 | C9 | token 是否绑定 IP | **是**（挡 token 转卖）；代价：换网络需重滑 | 🔶 已按建议实现（值存 IP），待追认 |
 | C10 | 底图：程序化 SVG（零素材）还是内置照片 | **程序化 SVG**（照片素材有许可问题，且 §6.1 已论证"更难识别"不成立） | 🔶 已按建议实现（零素材），待追认 |
 | C11 | 出题端点限流阈值 | 30 次/分钟 | 🔶 已按建议实现（`RATELIMIT_CAPTCHA_PER_MINUTE=30`），待追认 |
@@ -414,7 +414,7 @@ requireCaptcha =
 | 等时校验 / 假哈希不可破坏 | `server/src/services/auth.service.js`（`dummyPasswordHash`、`failLogin`） |
 | 键空间集中登记 | `docs/database.md` §7（⛔ 不新增用途前缀而未登记） |
 | `settings` 白名单唯一来源 | `server/src/services/settings.service.js` 的 `SETTING_DEFAULTS` + `docs/api.md` §4.10 |
-| 一次性 + 防重放口径 | `docs/api.md` §4.1.1 ④（`totp:used:<uid>` 同款） |
+| 一次性 + 防重放口径 | `docs/api-status.md` §3.3（`totp:used:<uid>` 同款；原 `api.md` §4.1.1 ④） |
 | fail-closed 取向 | `docs/api.md` §1.4（Redis 不可用 → 503，⛔ 不放开） |
 | `additionalProperties:false` 的 schema 约束 | `server/src/routes/auth.js` 的 `LOGIN_BODY_SCHEMA` |
 | 前端状态机与登录流程 | `web/src/store/auth.ts`、`web/src/views/Login.vue`、`docs/frontend.md` §4.2 |

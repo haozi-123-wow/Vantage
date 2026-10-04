@@ -15,6 +15,9 @@
  *  6. **凭证绑定来源 IP，且登录成功才消费**（失败不消费：否则用户打错一次密码就要重新验证）。
  *  7. **与三态矩阵正交**：它只决定"这次登录能不能进入验密环节"。
  *  8. **总开关关闭 → 整条链路像不存在**：出题端点 404，登录响应与接入前逐字节相同。
+ *  9. **登录成功后清零两个失败计数**（✅ 2026-10-04 Owner 决策 A）：闸门在验密之前（第 4 条）+
+ *     计数窗口默认 300s，若成功不清零，"错过一次密码"会让**整个窗口内每一次**登录都被要求验证 ——
+ *     哪怕这一次密码完全正确（用户看不到"密码错"，只看到"请先完成人机验证"）。
  *
  * ⛔ 对**内部依赖**（Redis）fail-closed：异常一律向上抛（由 `errors.js` 折叠为 503），
  *    ⛔ 绝不"读不到策略就放行"——那正好是攻击者最想要的状态。
@@ -268,6 +271,28 @@ export function createCaptchaService({ redis, pool, config, logger, fetchImpl = 
         enabled: usable,
         required: usable && (byIp.count >= afterFailures || byAcct.count >= afterFailures),
       };
+    },
+
+    /**
+     * 登录**成功**（密码已验对）后清零两个失败计数（✅ 2026-10-04 Owner 决策 A，见文件头第 9 条）。
+     *
+     * 🔑 为什么必须清：闸门在**验密之前**（第 4 条），而计数由**上一次**密码错误写入、
+     *    TTL = 登录限流窗口（默认 300s）。不清的话，窗口内"错过一次"会让**每一次**登录都被要求
+     *    人机验证 —— 包括密码完全正确的那次：用户看不到"密码错"，只看到"请先完成人机验证"。
+     * ⛔ 这不削弱爆破防护：攻击者**不知道**密码时压根走不到这里，两个计数照旧累积。
+     *
+     * ⚠️ 只用一条 `DEL`（不读、不判存在），且失败**只告警不抛**：登录此刻已经成功，
+     *    这里的清理是"体贴"而非安全边界；清理失败只会退回清理前的行为（下次仍可能要验证）。
+     * @param {{ ip?: string|null, username?: string|null }} input
+     */
+    async clearLoginFailures({ ip, username } = {}) {
+      const targets = [keys.loginFailIp(ip ?? '')];
+      if (username) targets.push(keys.loginFailAcct(username));
+      try {
+        await redis.del(...targets);
+      } catch (err) {
+        logger?.warn?.({ err }, '登录成功后清理人机验证失败计数失败（下次仍可能要求验证）');
+      }
     },
   };
 }

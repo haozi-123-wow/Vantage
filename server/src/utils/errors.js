@@ -12,9 +12,8 @@
 
 /**
  * 错误码登记表（code → HTTP 状态 + 默认中文消息）。
- * ⚠️ 唯一一处与文档不一致的取舍：`nonce_reused`。
- *    docs/api.md §1.3 把 nonce_reused 列在 401，但 §2.1（Agent 上报错误表）与 §6 验收用例第 4 条
- *    都写 **409**。此处以更具体的 §2.1/§6 为准取 409，并已在 README 中登记，待 Owner 拍板后统一文档。
+ * ✅ 2026-10-04：`nonce_reused` 的口径已统一为 **409**——docs/api.md §1.3 的总表已按 §2.1 与 §6 验收用例
+ *    第 4 条校正，本表与文档现已逐条一致，无遗留分歧（旧注释里「待 Owner 拍板后统一文档」已作废）。
  */
 export const ERROR_CODES = Object.freeze({
   // 400

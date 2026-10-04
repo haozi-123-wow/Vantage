@@ -30,5 +30,6 @@ declare module 'vue' {
     StatusBadge: typeof import('./components/StatusBadge.vue')['default']
     TwoFactorBindForm: typeof import('./components/two-factor/TwoFactorBindForm.vue')['default']
     TwoFactorPanel: typeof import('./components/two-factor/TwoFactorPanel.vue')['default']
+    TwoFactorUnbindForm: typeof import('./components/two-factor/TwoFactorUnbindForm.vue')['default']
   }
 }

@@ -81,3 +81,43 @@ export function prepareIp(raw) {
   const category = ip ? classifyIp(ip) : IP_CATEGORY.invalid;
   return { ip, category, trackable: category === IP_CATEGORY.trackable };
 }
+
+/**
+ * 是否是**私网/保留**地址（公开接口脱敏用，见文件头「将来的公开接口脱敏」）。
+ *
+ * 🔑 公开侧为什么要区分私网与公网（而不是一刀切隐藏所有 IP）：
+ *  - 私网地址（RFC1918 / CGNAT / ULA / 回环 / 链路本地）**直接暴露内网拓扑**——`10.0.2.15`
+ *    能让人推断出你的网段划分与机器角色，是 `docs/api.md` §3.1 明令禁止的内容；
+ *  - 公网地址（如探活目标 `223.5.5.5`、`1.1.1.1`）不含任何内部信息 —— 任何人 DNS 解析一下
+ *    域名也能拿到同样的事实，隐藏它只会让公开页失去可读性（"目标：—"）。
+ *  ⛔ 所以口径是「私网泛化、公网保留」，而不是"把所有 IP 都抹掉"。
+ *
+ * ⚠️ 不在此列但同样敏感的：**端口号与路径**（`http://10.0.0.5:8080/admin/health`）。
+ *    它们由调用方剥离（见 `services/status.service.js` 的 `desensitizeTarget()`），本函数只管地址。
+ *
+ * @param {unknown} value 已规范化的地址文本（`normalizeIp()` 的输出）
+ * @returns {boolean} 非 IP / 非法地址一律返回 `true`（**默认按敏感处理**，宁可少展示）
+ */
+export function isPrivateAddress(value) {
+  const ip = normalizeIp(value);
+  if (ip === null) return true; // 不是 IP（或非法）→ 调用方应按"不确定 = 敏感"处理
+
+  if (net.isIP(ip) === 4) {
+    const [a, b] = ip.split('.').map(Number);
+    if (a === 10) return true; // 10/8
+    if (a === 172 && b >= 16 && b <= 31) return true; // 172.16/12
+    if (a === 192 && b === 168) return true; // 192.168/16
+    if (a === 100 && b >= 64 && b <= 127) return true; // 100.64/10（CGNAT）
+    if (a === 127 || a === 0) return true; // 回环 / 未指定
+    if (a === 169 && b === 254) return true; // 链路本地
+    if (a >= 224) return true; // 组播 / 保留
+    return false;
+  }
+
+  const lower = ip.toLowerCase();
+  if (lower === '::1' || lower === '::') return true;
+  if (/^fe[89ab]/.test(lower)) return true; // fe80::/10 链路本地
+  if (/^f[cd]/.test(lower)) return true; // fc00::/7（ULA）
+  if (/^ff/.test(lower)) return true; // ff00::/8 组播
+  return false;
+}

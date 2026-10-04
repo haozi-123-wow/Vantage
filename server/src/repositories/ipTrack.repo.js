@@ -88,3 +88,50 @@ export async function countRecentIpChanges(client, { agentId, at, windowS }) {
   );
   return rows[0]?.n ?? 0;
 }
+
+// -----------------------------------------------------------------------------
+// 读路径（`GET /api/v1/hosts/{id}/ip-history`，docs/api.md §4.2 / 设计 §8）
+// -----------------------------------------------------------------------------
+
+/**
+ * IP **出现区间**列表（每 (ip, source) 一行，最近出现的在前）。
+ *
+ * ⚠️ `ip` / `source` 是区间表的**主键维度**，同一地址换来源（remote ↔ agent_reported）是两行 ——
+ *    这不是重复，而是"双源比对"的基础数据（设计 §8），前端必须按 `source` 分开看。
+ * ⚠️ `INET` 一律经 `host()` 转文本（IPv6 带掩码时会出 `::1/128`）。
+ *
+ * @param {import('pg').Pool} pool
+ * @param {{ agentId: string, limit: number }} input
+ */
+export async function listIpIntervals(pool, { agentId, limit }) {
+  const { rows } = await pool.query(
+    `SELECT host(ip) AS ip, source, first_seen, last_seen
+       FROM agent_ip_history
+      WHERE agent_id = $1::uuid
+      ORDER BY last_seen DESC, ip ASC
+      LIMIT $2`,
+    [agentId, limit],
+  );
+  return rows;
+}
+
+/**
+ * IP 变化 / Flapping **事件**列表（最近发生的在前）。
+ * ⚠️ 该表**永久保留**（决策 #11），因此必须 `LIMIT`（前端时间线只需要最近若干条）。
+ * ⚠️ `kind='flapping'` 的行是"进入 Flapping 态"这一个事件本身，不是第 N 次变化 —— 面板按不同样式渲染。
+ *
+ * @param {import('pg').Pool} pool
+ * @param {{ agentId: string, limit: number }} input
+ */
+export async function listIpChangeEvents(pool, { agentId, limit }) {
+  const { rows } = await pool.query(
+    `SELECT host(old_ip) AS old_ip, host(new_ip) AS new_ip, same_subnet, changed_at,
+            source, kind, change_count, host(subnet_prev) AS subnet_prev, host(subnet_next) AS subnet_next
+       FROM ip_change_events
+      WHERE agent_id = $1::uuid
+      ORDER BY changed_at DESC
+      LIMIT $2`,
+    [agentId, limit],
+  );
+  return rows;
+}

@@ -56,3 +56,122 @@ export async function insertProbeResults(client, input) {
   );
   return result.rowCount ?? 0;
 }
+
+/**
+ * 状态接口的 `probes: { up, down }` 取数（docs/server-status-api.md §4.3）。
+ *
+ * 「最近一轮」的判定 = 每机 `checked_at` **最大**的那一批。为什么是"那一批"而不是"最近 N 条"：
+ * 同一次探活的所有目标由 `insertProbeResults` 在**同一条 SQL**里写入，`checked_at` 完全相同，
+ * 所以「最大 checked_at」天然就是完整的一轮（⛔ 若按"最近 10 条"取，目标数不同的机器会得到不可比的口径）。
+ *
+ * ⚠️ `checked_at >= $2` 的窗口不可省：`probe_results` 保留 90 天，无窗口的 `max(checked_at)`
+ *    会扫全表；窗口用与 snapshot 相同的 5 分钟（`services/status.service.js` 的 `OBSERVATION_WINDOW_S`）。
+ * ⚠️ 窗口外一律返回 0 行 → 调用方填 `{ up: 0, down: 0 }`（⛔ 不是 null、也不是旧值）。
+ *
+ * @param {import('pg').Pool} pool
+ * @param {{ agentIds: string[], since: Date }} input
+ * @returns {Promise<Array<{ agent_id: string, up: number, down: number }>>}
+ */
+export async function countLatestProbeResults(pool, input) {
+  const { agentIds, since } = input;
+  if (!Array.isArray(agentIds) || agentIds.length === 0) return [];
+
+  const { rows } = await pool.query(
+    `WITH latest AS (
+       SELECT agent_id, max(checked_at) AS at
+         FROM probe_results
+        WHERE agent_id = ANY($1::uuid[])
+          AND checked_at >= $2::timestamptz
+        GROUP BY agent_id
+     )
+     SELECT p.agent_id,
+            count(*) FILTER (WHERE p.up)::int     AS up,
+            count(*) FILTER (WHERE NOT p.up)::int AS down
+       FROM probe_results p
+       JOIN latest l ON l.agent_id = p.agent_id AND l.at = p.checked_at
+      WHERE p.agent_id = ANY($1::uuid[])
+      GROUP BY p.agent_id`,
+    [agentIds, since],
+  );
+  return rows;
+}
+
+/**
+ * 取**最近一轮**的逐条探活结果（公开 `/api/public/probes` 用）。
+ *
+ * 与 `countLatestProbeResults` 的区别只是"要不要明细"：两者共用「`max(checked_at)` = 最近一轮」
+ * 这个判定，⛔ 不允许其中一处改成"最近 N 条"（那会让计数与明细对不上）。
+ *
+ * @param {import('pg').Pool} pool
+ * @param {{ agentIds: string[], since: Date, limit: number }} input
+ * @returns {Promise<Array<object>>} 每行 = 一条探活明细（含 agent_id、probe_name、target、up、latency_ms…）
+ */
+export async function selectLatestProbeRound(pool, { agentIds, since, limit }) {
+  if (!Array.isArray(agentIds) || agentIds.length === 0) return [];
+
+  const { rows } = await pool.query(
+    `WITH latest AS (
+       SELECT agent_id, max(checked_at) AS at
+         FROM probe_results
+        WHERE agent_id = ANY($1::uuid[])
+          AND checked_at >= $2::timestamptz
+        GROUP BY agent_id
+     )
+     SELECT p.agent_id, p.probe_name, p.probe_type, p.target, p.up,
+            p.latency_ms, p.status_code, p.error, p.checked_at
+       FROM probe_results p
+       JOIN latest l ON l.agent_id = p.agent_id AND l.at = p.checked_at
+      WHERE p.agent_id = ANY($1::uuid[])
+      ORDER BY p.agent_id, p.probe_name
+      LIMIT $3`,
+    [agentIds, since, limit],
+  );
+  return rows;
+}
+
+/**
+ * 取某台主机的**探活历史**（`GET /api/v1/hosts/{id}/probes` 用）。
+ *
+ * 🔑 两个"看起来可以省、其实不能省"的地方：
+ *  1. **可用率必须在同一条查询里用窗口函数算**（`count(*) OVER (PARTITION BY probe_name)`）：
+ *     本查询对每个 probe 只返回最近 `perProbeLimit` 个点（防止一年窗口把响应撑爆），
+ *     若在 JS 里用"返回的这些点"算可用率，**被截断的探活会被系统性忽略**，
+ *     于是"可用率 100%"却明明断过 —— 这类错误没人会怀疑到分页上。
+ *  2. `probe_name` 分组而不是 `(name,type,target)`：Agent 的 config.yaml 里 probe 名就是它的身份，
+ *     同一名字改目标属于"同一条探活的配置变更"，不该在图上裂成两条线。
+ *
+ * @param {import('pg').Pool} pool
+ * @param {object} input
+ * @param {string} input.agentId
+ * @param {Date} input.from
+ * @param {Date|null} input.to
+ * @param {string|null} [input.name] 只取某个 probe
+ * @param {string|null} [input.type] 只取某类（ping/http/https/tcp/dns）
+ * @param {number} input.perProbeLimit 每个 probe 最多返回多少个点（取**最近**的那些）
+ */
+export async function selectProbeHistory(pool, input) {
+  const { agentId, from, to, name = null, type = null, perProbeLimit } = input;
+  const { rows } = await pool.query(
+    `SELECT probe_name, probe_type, target, up, latency_ms, status_code, error, checked_at,
+            total_in_window, up_in_window, first_in_window, last_in_window
+       FROM (
+         SELECT p.probe_name, p.probe_type, p.target, p.up, p.latency_ms, p.status_code, p.error, p.checked_at,
+                row_number() OVER (PARTITION BY p.probe_name ORDER BY p.checked_at DESC) AS rn,
+                -- ⚠️ 这三个必须基于**整个窗口**（不受 rn 截断影响），否则可用率会系统性偏高
+                count(*)      OVER (PARTITION BY p.probe_name)                     AS total_in_window,
+                count(*) FILTER (WHERE p.up) OVER (PARTITION BY p.probe_name)      AS up_in_window,
+                min(p.checked_at) OVER (PARTITION BY p.probe_name)                 AS first_in_window,
+                max(p.checked_at) OVER (PARTITION BY p.probe_name)                 AS last_in_window
+           FROM probe_results p
+          WHERE p.agent_id = $1::uuid
+            AND p.checked_at >= $2::timestamptz
+            AND ($3::timestamptz IS NULL OR p.checked_at <= $3::timestamptz)
+            AND ($4::text IS NULL OR p.probe_name = $4)
+            AND ($5::text IS NULL OR p.probe_type = $5)
+       ) x
+      WHERE x.rn <= $6
+      ORDER BY x.probe_name ASC, x.checked_at DESC`,
+    [agentId, from, to, name, type, perProbeLimit],
+  );
+  return rows;
+}

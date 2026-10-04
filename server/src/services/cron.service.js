@@ -4,7 +4,7 @@
  * 依据：docs/database.md §8.2（定时任务规格）、§8.1（保留期矩阵）、
  *       决策 #50（core 内置任务 + 分布式锁）、R13/R14/R15
  *
- * 本服务当前承担**六项**任务（原计划放在 M3，因"分区提前量"有硬死线而提前，见 design-deltas）：
+ * 本服务当前承担**七项**任务（前六项原计划放在 M3，因"分区提前量"有硬死线而提前，见 design-deltas）：
  *
  *   create_partitions      每日 + **每次启动**   预建未来 N 天 metrics_raw 分区（幂等）
  *   drop_partitions        每日                 删 ts 全部过期的整日分区（⛔ 有降采样健康门禁）
@@ -12,6 +12,11 @@
  *   aggregate_5m           每 300s              原始层 → metrics_5m
  *   purge_downsampled      每日                 1m > 90d、5m > 1y 分批 DELETE
  *   purge_non_timeseries   每日                 探活/进程/IP 区间/通知/审计/静默 分批 DELETE
+ *   offline_sweep          每 30s              超时未上报 → agents.status = 'offline'（⛔ 防抖：只 online→offline）
+ *
+ * ⚠️ `offline_sweep` **不是可选的优化项**：上报路径是请求驱动的，机器断电时没有任何请求进来，
+ *    `agents.status` 会永远停在 `online`（= 死了三天的机器在面板上仍是绿的）。
+ *    详见 services/offline.service.js 的文件头。
  *
  * 三条不可动摇的工程规则
  *  1. **DDL 走 migrator 池，DML 走运行时池**（✅ R13）。
@@ -29,8 +34,10 @@
 import os from 'node:os';
 
 import { AppError, normalizeError } from '../utils/errors.js';
-import { CRON_TASKS, keys } from '../utils/redisKeys.js';
+import { CHANNEL, CRON_TASKS, keys } from '../utils/redisKeys.js';
+import { publish } from '../db/redis.js';
 import { checkDownsampleHealth, aggregateTier, wasDayAggregated } from './downsample.service.js';
+import { markStaleAgentsOffline, offlineThresholdS } from './offline.service.js';
 import {
   checkPartitionHealth,
   dropPartitionsByName,
@@ -205,9 +212,66 @@ export function createCronService({ db, redis, config, logger }) {
           logger,
         }),
     },
+    {
+      /**
+       * 离线判定（「点名」）：把超时未上报的主机置为 `offline`。
+       *
+       * 频率取自 `config.heartbeat.sweepIntervalS`（默认 30s，docs/database.md §8.2 的
+       * 「建议每 15–30s」）—— 这个配置项本来就是为它存在的，⛔ 不要另加一个 env。
+       *
+       * 为什么要**广播**：`services/ingest.service.js` 的 `publishDeltas()` 里那条
+       * 「`offline/从未上报 → online` 才广播」的逻辑，其存在的唯一意义就是给浏览器补发
+       * 「恢复」增量；如果离线这件事从不广播，那么「离线 → 恢复」这个**状态对**永远不完整：
+       * 前端只能自己轮询才发现某台机器掉线了。两者共用同一频道（`live:metrics`）与同一
+       * 消息形状（docs/api.md §5.2 的 `delta`），原因是 M3 的 WS 层要**原样转发**，不翻译第二遍。
+       */
+      name: CRON_TASKS.offlineSweep,
+      intervalMs: config.heartbeat.sweepIntervalS * 1000,
+      run: async () => {
+        const thresholdS = offlineThresholdS(config);
+        const { changed } = await markStaleAgentsOffline(db.app, { thresholdS, logger });
+
+        // ⛔ 扇出失败绝不能让「离线判定」这个任务算失败：状态已经落库了，
+        //    重跑也不会再返回值（幂等），失败只影响实时推送、下次刷新页面即自愈。
+        if (changed.length > 0) {
+          await publishOfflineDeltas(changed).catch((err) => {
+            logger.warn({ err, count: changed.length }, 'status:offline 扇出失败（状态已入库，不影响判定）');
+          });
+        }
+
+        return { offline: changed.length, thresholdS, agents: changed.map((c) => c.name) };
+      },
+    },
   ];
 
   const byName = new Map(tasks.map((task) => [task.name, task]));
+
+  /**
+   * 把「刚刚掉线」的主机扇出给实时层（与 `ingest.service.js` 的 `publishDeltas` 同频道同形状）。
+   *
+   * ⚠️ `ts` 用**当前时刻**（= 判定/广播时刻），而不是 `last_seen_at`（= 该机最后一次上报，可能已过去几小时）。
+   *    前端拿 `ts` 当"这条增量的发生时间"，拿 `last_seen_at` 当"最后在线于何时"展示 —— 两者语义不同，
+   *    混用会让面板显示"最后上报时间 = 刚刚"（在机器已经离线三天时尤其离谱）。
+   * ⚠️ `last_seen_at` 为该机最后一次上报时间；`last_seen_at IS NULL`（从未上报过）时**不发这个字段**，
+   *    与 `ingest.service.js` 在 status 增量里总是带 `last_seen_at: serverTs.toISOString()` 的形状保持一致。
+   * @param {Array<{ agentId: string, name: string, lastSeenAt: Date|null }>} changed
+   */
+  async function publishOfflineDeltas(changed) {
+    const ts = Date.now();
+    const commands = changed.map((item) => [
+      CHANNEL.liveMetrics,
+      JSON.stringify({
+        type: 'delta',
+        ts,
+        channel: 'status',
+        agent_id: item.agentId,
+        status: 'offline',
+        ...(item.lastSeenAt ? { last_seen_at: new Date(item.lastSeenAt).toISOString() } : {}),
+      }),
+    ]);
+    await publish(redis, commands);
+    logger.debug({ count: commands.length }, 'status:offline 已扇出');
+  }
 
   // --- 调度状态 -------------------------------------------------------------
   let timer = null;

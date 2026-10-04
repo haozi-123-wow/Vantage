@@ -14,6 +14,10 @@
  * - ⛔ 不自绘按钮、不自绘验证窗：观感全部由极验提供（C16 已定），我们只控制**什么时候显示那个容器**；
  * - ⛔ 组件内不硬编码任何文案（全部走 i18n，§7.4）；
  * - ⛔ 不把极验的 `error.code` 展示给用户，也不与本服务的 `error.code` 混用（§7.5 坑三）。
+ * - ⛔ **不把 `getValidate()` 的返回值整对象转发**给 `/auth/captcha/verify`：极验实测返回 **5** 个字段
+ *   （它是客户端 `/verify` 响应里 `data.seccode` 的原样对象，多一个 `captcha_id`），而服务端 schema 是
+ *   `additionalProperties: false` 的白名单 —— 整份转发会被 400 `schema_invalid` 拒掉，用户看到极验
+ *   "验证通过"却永远登不进去（2026-10-04 真实事故）。➡️ 一律经 `toVerifyBody()` 投影。
  *
  * ⚠️ 初始化时机（§4.1 / §7.3）：**页面加载时**就 `initGeetest4` 并 `appendTo`（官方要求行为采集
  *    从页面打开即开始），容器由 `visible` 控制显示 —— 所以首次登录的用户**看不到任何验证入口**。
@@ -26,7 +30,7 @@ import { AppError } from '@/api/http'
 import { authApi, captchaReasonOf } from '@/api/private'
 import type { GeetestCaptchaChallenge } from '@/api/private'
 import { errorText } from '@/i18n'
-import { loadGeetest, type GeetestInstance, type GeetestValidate } from '@/utils/geetest'
+import { loadGeetest, toVerifyBody, type GeetestInstance, type GeetestValidate } from '@/utils/geetest'
 
 const props = defineProps<{
   /** `/auth/captcha/challenge` 的**极验分支**响应（`captcha_id` 由服务端运行时下发，⛔ 不来自构建期 env） */
@@ -172,7 +176,9 @@ async function submit(validate: GeetestValidate): Promise<void> {
   noticeKey.value = null
   noticeText.value = null
   try {
-    const result = await authApi.captchaVerify(validate)
+    // ⛔ 只提交服务端白名单里的 4 个字段：极验的 `getValidate()` 实际会多带 `captcha_id`
+    //    （= 客户端 `/verify` 响应里 `data.seccode` 的原样对象），整份转发会 400 `schema_invalid`。
+    const result = await authApi.captchaVerify(toVerifyBody(validate))
     noticeKey.value = 'captcha.verified'
     emit('success', result.captcha_token)
   } catch (error) {

@@ -2,48 +2,34 @@
 
 > **来源**：由《Vantage-DESIGN-v0.7.md》拆分的**后端接口契约文档**。
 > **适用对象**：vantage-core 开发者、Agent 开发者（`docs/agent.md`）、面板开发者（`docs/frontend.md`）。
-> **文档性质**：接口契约（路径 / 认证 / **请求参数** / **返回字段** / 错误码 / 语义），**不含实现代码**。
+> **文档性质**：接口契约（路径 / 认证 / **请求参数** / **返回字段** / 错误码 / 语义）——**只写已定的东西**；⛔ 不含实现代码、不含落地进度。
 > **上位文档**：`Vantage-DESIGN-v0.7.md`（**文件内容已是 v0.8**，文件名保留以维持引用；§5、§6、§10、§18 为主）；决策以其 §15 为准（共 59 条）。
-> **阅读约定**：本文中的「✅ 本轮决策 / 本轮已定」= 2026-09-26 Owner 拍板，**均已写入设计文档 v0.8**；逐条对照见 `docs/design-deltas.md`。
+> **配套文档**：`docs/api-status.md` = 落地状态 / 实现期规范 / 决策记录 / **待拍板索引**。原本文的「实现进度速览」「§4.1.1 实现规范与落地状态」「§7 待 Owner 拍板清单」已于 **2026-10-04 全部迁至该文件**——⛔ 本文不再重复状态，避免两份文档互相漂移。
 
 **怎么读这份文档**
 
 | 你的目的 | 去哪里 |
 |---|---|
 | **查某个接口要传什么、返回什么** | 先在下面「0. 端点总索引」定位，每个端点都按 **认证/限流 → 请求参数 → 返回字段 → 错误码 → 备注** 排列 |
-| 知道**现在能用哪些、哪些还没写** | 「实现进度速览」+ 每个端点标题后的 ✅ 已实现 / ⏳ 未实现 |
+| 知道**现在能用哪些、哪些还没写** | 「0. 端点总索引」的**状态**列（✅ 已实现 / ⏳ 未实现）；细节见 `docs/api-status.md` §1 |
 | 写 **Go Agent** | 第 2 章（Agent 侧实现细节另见 `docs/agent.md`） |
 | 写**面板前端** | §1.2（通用约定）、§3（公开页）、§4（登录后页面）、§5（实时通道） |
-| 查**会话 / 2FA 的内部机制**（Redis 键、三态矩阵、防重放、待拍板项） | §4.1.1（实现规范与落地状态） |
+| 查**会话 / 2FA / 人机验证的内部机制**（Redis 键、三态矩阵、防重放） | `docs/api-status.md` §3 |
+| 查**哪些还没拍板** | `docs/api-status.md` §5（决议索引） |
 
 **标注图例**
 
 | 标记 | 含义 |
 |---|---|
-| ✅ 已定 | 直接来自设计文档，不得擅自更改 |
-| ➕ 建议 | 拆分时补齐的工程细节，**需 Owner 确认** |
-| ❓ 待拍板 | 设计文档未定或存在冲突 |
-| ✅ 已实现 | 代码已落地、当前可用 |
-| ⏳ 未实现 | **契约已定稿（或本轮定稿），但代码尚未落地**——当前调用会命中 404 `not_found` |
+| ✅ 已定 | 直接来自设计文档或 Owner 拍板，不得擅自更改 |
+| ⏳ 未实现 | 契约已定，**代码尚未落地**——当前调用会命中 404 `not_found` |
+| ❓ 待拍板 | 尚未拍板；逐条决议索引见 `docs/api-status.md` §5 |
 | ⛔ | 禁止项（违反单向宗旨即视为重大缺陷） |
 
-> 文中出现的 **S1–S4** = §4.1.1 ⑦ 里「登录人机验证（滑块验证码）」的分块；实施规范见 `docs/slider-captcha-selfbuilt.md`，选型调研见 `docs/slider-captcha.md`。
+> 文中 **S1–S9** = 登录人机验证的分块；实施记录见 `docs/api-status.md` §3.6，实施规范见 `docs/slider-captcha-selfbuilt.md`（自建）与 `docs/geetest-captcha.md`（极验）。
+> ⚠️ 端点标题后缀「✅ 已实现 / ⏳ 未实现」与 §0 索引的**状态**列同源，只回答"代码有没有落地"；**契约是否已定**看 `✅ 已定` / `❓ 待拍板`。
 
-**实现进度速览（2026-10-03，随落地更新；逐端点状态见对应章节）**
-
-| 模块 | 状态 | 落点 |
-|---|---|---|
-| 健康检查（`/healthz` `/readyz` `/version`） | ✅ 已实现 | §1.6 |
-| Agent 上报 / 心跳（HMAC 签名） | ✅ 已实现（M1） | §2 |
-| 面板账号：登录 / me / 登出 / 改密（会话 + CSRF + 审计） | ✅ 已实现 | §4.1（落地记录 §4.1.1 ⑧） |
-| 面板 2FA（绑定 / 解绑 / 第二步 / 恢复码） | ✅ 已实现（B6/B7） | §4.1（落地记录 §4.1.1 ⑤⑦⑧） |
-| 登录人机验证（滑块，**自建**） | ✅ 已落地（S1–S3；⏳ 待跑 `npm test` 验收） | §4.1；实施规范见 `docs/slider-captcha-selfbuilt.md` |
-| 登录人机验证（**极验 v4**，官方按钮） | ✅ **后端（S5–S7）与前端（S8）均已落地**；⏳ 待跑 `npm test` 与真机联调 | §4.1（**双提供方分支已并入本文**）；变更方案见 `docs/geetest-captcha.md`（前端落地记录 §16.7） |
-| 首管员 / 离线救援 CLI | ✅ 已实现 | §4.1.1 ⑥ |
-| 公开只读快照（`/api/public/*`） | ⏳ 未实现（M2） | §3 |
-| 主机 / 历史 / 进程 Top | ⏳ 未实现（M2） | §4.2–§4.4 |
-| 告警 / 通道 / 静默 / 设置 / 用户 / 审计查询 | ⏳ 未实现（M3） | §4.5–§4.10 |
-| WebSocket（`/ws/*`） | ⏳ 未实现（M3） | §5 |
+**实现进度速览** → 已迁至 `docs/api-status.md` §1（2026-10-04）。本文只在 §0 索引里保留逐端点的 ✅ 已实现 / ⏳ 未实现。
 
 ---
 
@@ -57,57 +43,61 @@
 | GET | `/healthz` | 存活探针（不查依赖） | 公开 | ✅ | §1.6 |
 | GET | `/readyz` | 就绪探针（PG + Redis） | 公开 | ✅ | §1.6 |
 | GET | `/version` | 版本信息 | 公开 | ✅ | §1.6 |
-| POST | `/api/v1/agent/report` | Agent 上报指标 / 探活 | HMAC | ✅ M1 | §2.1 |
-| POST | `/api/v1/agent/heartbeat` | Agent 心跳（无变更） | HMAC | ✅ M1 | §2.2 |
-| GET | `/api/public/summary` | 汇总计数（在线/离线/告警） | 公开 | ⏳ M2 | §3.2 |
-| GET | `/api/public/hosts` | 公开主机列表（slug） | 公开 | ⏳ M2 | §3.3 |
-| GET | `/api/public/hosts/{slug}/now` | 单机当前快照 | 公开 | ⏳ M2 | §3.4 |
-| GET | `/api/public/probes` | 探活当前概览 | 公开 | ⏳ M2 | §3.5 |
-| POST | `/api/v1/auth/login` | 登录第一步（密码；密码错后要求人机验证） | 公开 | ✅ B4 + S | §4.1 |
-| POST | `/api/v1/auth/captcha/challenge` | 取滑块验证题（人机验证） | 公开 | ✅ S | §4.1 |
-| POST | `/api/v1/auth/captcha/verify` | 校验滑块并发放一次性 `captcha_token` | 公开 | ✅ S | §4.1 |
-| POST | `/api/v1/auth/2fa/verify` | 登录第二步（TOTP 6 位） | Cookie | ✅ B7 | §4.1 |
-| GET | `/api/v1/auth/me` | 恢复登录态 + 取 CSRF | Cookie | ✅ B4 | §4.1 |
-| POST | `/api/v1/auth/logout` | 登出当前会话 | Cookie | ✅ B4 | §4.1 |
-| POST | `/api/v1/auth/logout-all` | 全部会话下线 | Cookie | ✅ B4 | §4.1 |
-| POST | `/api/v1/auth/password` | 自助改密 | Cookie | ✅ B5 | §4.1 |
-| POST | `/api/v1/auth/2fa/setup` | 生成待确认 TOTP 密钥 + 二维码 | Cookie | ✅ B6 | §4.1 |
-| POST | `/api/v1/auth/2fa/enable` | 验码绑定 + 发 10 个恢复码 | Cookie | ✅ B6 | §4.1 |
-| POST | `/api/v1/auth/2fa/disable` | 密码确认解绑 | Cookie | ✅ B6 | §4.1 |
-| POST | `/api/v1/auth/2fa/recovery/verify` | 用恢复码过第二步 | Cookie | ✅ B7 | §4.1 |
-| POST | `/api/v1/auth/2fa/recovery/regenerate` | 重发 10 个恢复码 | Cookie | ✅ B7 | §4.1 |
-| GET | `/api/v1/hosts` | 主机列表（含 IP） | Cookie | ⏳ M2 | §4.2 |
-| GET | `/api/v1/hosts/{id}` | 主机详情 | Cookie | ⏳ M2 | §4.2 |
-| GET | `/api/v1/hosts/{id}/metrics` | 时序查询 | Cookie | ⏳ M2 | §4.3 |
-| GET | `/api/v1/hosts/{id}/probes` | 探活历史 | Cookie | ⏳ M2 | §4.2 |
-| GET | `/api/v1/hosts/{id}/ip-history` | IP 变更历史 | Cookie | ⏳ M2 | §4.2 |
-| GET | `/api/v1/hosts/{id}/processes` | 进程 Top 快照 | Cookie | ⏳ M2 | §4.2 |
-| GET | `/api/v1/agents` | Agent 列表 + 凭证年龄 | Cookie | ⏳ M3 | §4.4 |
-| POST | `/api/v1/agents` | 创建 Agent（明文 key/secret 仅一次） | Cookie | ⏳ M3 | §4.4 |
-| GET | `/api/v1/agents/{id}` | Agent 元信息 | Cookie | ⏳ M3 | §4.4 |
-| PATCH | `/api/v1/agents/{id}` | 改显示名 / 标签 | Cookie | ⏳ M3 | §4.4 |
-| POST | `/api/v1/agents/{id}/rotate` | 手动轮换凭证 | Cookie | ⏳ M3 | §4.4 |
-| POST | `/api/v1/agents/{id}/disable` \| `/enable` | 禁用 / 启用 | Cookie | ⏳ M3 | §4.4 |
-| POST | `/api/v1/agents/{id}/revoke` | 吊销（不可恢复） | Cookie | ⏳ M3 | §4.4 |
-| GET/POST | `/api/v1/alert-rules` | 规则列表 / 创建 | Cookie | ⏳ M3 | §4.5 |
-| GET/PATCH/DELETE | `/api/v1/alert-rules/{id}` | 规则读 / 改 / 删 | Cookie | ⏳ M3 | §4.5 |
-| POST | `/api/v1/alert-rules/{id}/dry-run` | 历史试算（不发送） | Cookie | ⏳ M3 | §4.5 |
-| GET | `/api/v1/alert-events` | 告警事件列表 | Cookie | ⏳ M3 | §4.6 |
-| GET | `/api/v1/alert-events/{id}` | 事件详情 + 发送记录 | Cookie | ⏳ M3 | §4.6 |
-| GET/POST | `/api/v1/channels` | 通知通道列表 / 创建 | Cookie | ⏳ M3 | §4.6 |
-| PATCH/DELETE | `/api/v1/channels/{id}` | 通道更新 / 删除 | Cookie | ⏳ M3 | §4.6 |
-| POST | `/api/v1/channels/{id}/test` | 发送测试消息 | Cookie | ⏳ M3 | §4.6 |
-| GET | `/api/v1/notification-log` | 发送记录（排障） | Cookie | ⏳ M3 | §4.6 |
-| GET/POST | `/api/v1/silences` | 静默窗口列表 / 创建 | Cookie | ⏳ M3 | §4.7 |
-| DELETE | `/api/v1/silences/{id}` | 取消静默窗口 | Cookie | ⏳ M3 | §4.7 |
-| GET | `/api/v1/audit-logs` | 审计日志查询 | Cookie | ⏳ M3 | §4.8 |
-| GET/POST | `/api/v1/users` | 用户列表 / 创建 | Cookie(admin) | ⏳ M3 | §4.9 |
-| PATCH | `/api/v1/users/{id}` | 改角色 / 显示名 / 状态 | Cookie(admin) | ⏳ M3 | §4.9 |
-| POST | `/api/v1/users/{id}/password-reset` | 重置他人密码 | Cookie(admin) | ⏳ M3 | §4.9 |
-| POST | `/api/v1/users/{id}/2fa/reset` | 重置他人 2FA + 踢下线 | Cookie(admin) | ⏳ M3 | §4.9 |
-| GET/PATCH | `/api/v1/settings` | 系统设置读 / 改 | Cookie | ⏳ M3 | §4.10 |
-| WS | `/ws/public` | 公开实时通道（脱敏） | 公开 | ⏳ M3 | §5.1 |
-| WS | `/ws/live` | 面板实时通道（全量） | Cookie | ⏳ M3 | §5.1 |
+| POST | `/api/v1/agent/report` | Agent 上报指标 / 探活 | HMAC | ✅ | §2.1 |
+| POST | `/api/v1/agent/heartbeat` | Agent 心跳（无变更） | HMAC | ✅ | §2.2 |
+| GET | `/api/public/summary` | 汇总计数（在线/离线/禁用/告警） | 公开 | ✅ | §3.2 |
+| GET | `/api/public/hosts` | 公开主机列表（slug） | 公开 | ✅ | §3.2 |
+| GET | `/api/public/hosts/{slug}/now` | 单机当前快照（就地展开） | 公开 | ✅ | §3.2 |
+| GET | `/api/public/probes` | 探活当前概览 | 公开 | ✅ | §3.2 |
+| POST | `/api/v1/auth/login` | 登录第一步（密码；密码错后要求人机验证） | 公开 | ✅ | §4.1 |
+| POST | `/api/v1/auth/captcha/challenge` | 取验证入口配置（人机验证） | 公开 | ✅ | §4.1 |
+| POST | `/api/v1/auth/captcha/verify` | 校验人机验证并发放一次性 `captcha_token` | 公开 | ✅ | §4.1 |
+| POST | `/api/v1/auth/2fa/verify` | 登录第二步（TOTP 6 位） | Cookie | ✅ | §4.1 |
+| GET | `/api/v1/auth/me` | 恢复登录态 + 取 CSRF | Cookie | ✅ | §4.1 |
+| POST | `/api/v1/auth/logout` | 登出当前会话 | Cookie | ✅ | §4.1 |
+| POST | `/api/v1/auth/logout-all` | 全部会话下线 | Cookie | ✅ | §4.1 |
+| POST | `/api/v1/auth/password` | 自助改密 | Cookie | ✅ | §4.1 |
+| POST | `/api/v1/auth/2fa/setup` | 生成待确认 TOTP 密钥 + 二维码 | Cookie | ✅ | §4.1 |
+| POST | `/api/v1/auth/2fa/enable` | 验码绑定 + 发 10 个恢复码 | Cookie | ✅ | §4.1 |
+| POST | `/api/v1/auth/2fa/disable` | 密码确认解绑 | Cookie | ✅ | §4.1 |
+| POST | `/api/v1/auth/2fa/recovery/verify` | 用恢复码过第二步 | Cookie | ✅ | §4.1 |
+| POST | `/api/v1/auth/2fa/recovery/regenerate` | 重发 10 个恢复码 | Cookie | ✅ | §4.1 |
+| GET | `/api/v1/hosts` | 主机列表（含 IP） | Cookie | ✅ | §4.2 |
+| GET | `/api/v1/summary` | 面板汇总计数（在线/离线/禁用/告警） | Cookie | ✅ | §4.2 |
+| GET | `/api/v1/hosts/{id}` | 主机详情（+ 全序列当前值） | Cookie | ✅ | §4.2 |
+| GET | `/api/v1/hosts/{id}/metrics` | 时序查询 | Cookie | ⏳ | §4.3 |
+| GET | `/api/v1/hosts/{id}/probes` | 探活历史 + 可用率 | Cookie | ✅ | §4.2 |
+| GET | `/api/v1/hosts/{id}/ip-history` | IP 变更时间线 | Cookie | ✅ | §4.2 |
+| GET | `/api/v1/hosts/{id}/processes` | 进程 Top 快照 | Cookie | ✅ | §4.2 |
+| GET | `/api/v1/agents` | Agent 列表 + 凭证年龄 | Cookie | ⏳ | §4.4 |
+| POST | `/api/v1/agents` | 创建 Agent（明文 key/secret 仅一次） | Cookie（admin） | ✅ | §4.4 |
+| GET | `/api/v1/agents/{id}` | Agent 元信息 | Cookie | ⏳ | §4.4 |
+| PATCH | `/api/v1/agents/{id}` | 改显示名 / 标签 | Cookie | ⏳ | §4.4 |
+| POST | `/api/v1/agents/{id}/rotate` | 手动轮换凭证 | Cookie | ⏳ | §4.4 |
+| POST | `/api/v1/agents/{id}/disable` \| `/enable` | 禁用 / 启用 | Cookie | ⏳ | §4.4 |
+| POST | `/api/v1/agents/{id}/revoke` | 吊销（不可恢复） | Cookie | ⏳ | §4.4 |
+| POST | `/api/v1/agents/{id}/rotate-reminder/test` | 手动触发一次凭证到期提醒（验证通道） | Cookie | ⏳ | §4.4 |
+| GET/POST | `/api/v1/alert-rules` | 规则列表 / 创建 | Cookie | ⏳ | §4.5 |
+| GET/PATCH/DELETE | `/api/v1/alert-rules/{id}` | 规则读 / 改 / 删 | Cookie | ⏳ | §4.5 |
+| POST | `/api/v1/alert-rules/{id}/dry-run` | 历史试算（不发送） | Cookie | ⏳ | §4.5 |
+| GET | `/api/v1/alert-events` | 告警事件列表 | Cookie | ⏳ | §4.6 |
+| GET | `/api/v1/alert-events/{id}` | 事件详情 + 发送记录 | Cookie | ⏳ | §4.6 |
+| GET/POST | `/api/v1/channels` | 通知通道列表 / 创建 | Cookie | ⏳ | §4.6 |
+| PATCH/DELETE | `/api/v1/channels/{id}` | 通道更新 / 删除 | Cookie | ⏳ | §4.6 |
+| POST | `/api/v1/channels/{id}/test` | 发送测试消息 | Cookie | ⏳ | §4.6 |
+| GET | `/api/v1/notification-log` | 发送记录（排障） | Cookie | ⏳ | §4.6 |
+| GET/POST | `/api/v1/silences` | 静默窗口列表 / 创建 | Cookie | ⏳ | §4.7 |
+| DELETE | `/api/v1/silences/{id}` | 取消静默窗口 | Cookie | ⏳ | §4.7 |
+| GET | `/api/v1/audit-logs` | 审计日志查询 | Cookie | ⏳ | §4.8 |
+| GET/POST | `/api/v1/users` | 用户列表 / 创建 | Cookie(admin) | ⏳ | §4.9 |
+| PATCH | `/api/v1/users/{id}` | 改角色 / 显示名 / 状态 | Cookie(admin) | ⏳ | §4.9 |
+| POST | `/api/v1/users/{id}/password-reset` | 重置他人密码 | Cookie(admin) | ⏳ | §4.9 |
+| POST | `/api/v1/users/{id}/2fa/reset` | 重置他人 2FA + 踢下线 | Cookie(admin) | ⏳ | §4.9 |
+| GET/PATCH | `/api/v1/settings` | 系统设置读 / 改 | Cookie | ⏳ | §4.10 |
+| WS | `/ws/public` | 公开实时通道（脱敏） | 公开 | ⏳ | §5.1 |
+| WS | `/ws/live` | 面板实时通道（全量） | Cookie | ⏳ | §5.1 |
+
+> **里程碑映射（M1/M2/M3）与分块落地记录**（B1–B8、S1–S9）已移至 `docs/api-status.md` §1 与 §3.6；本表只回答"能不能用"。
 
 ---
 
@@ -122,9 +112,9 @@
 | 面板私有 | `/api/v1/*` | **面板会话**（Cookie 不透明 `sid`） | 历史/配置/管理 |
 | 实时 | `/ws/public`、`/ws/live` | 前者免登录，后者需登录 | WebSocket（决策 #33） |
 
-➕ 建议：面板与反代**同源部署**（Caddy 反代 `/api` 与 `/ws`），不开启跨域 CORS；若必须跨域，只允许白名单 Origin + `credentials: true`。
+❓ 待拍板（部署形态）：面板与反代**同源部署**（Caddy 反代 `/api` 与 `/ws`），不开启跨域 CORS；若必须跨域，只允许白名单 Origin + `credentials: true`。决议索引：`docs/api-status.md` §5.1。
 
-### 1.2 通用请求约定（➕ 建议）
+### 1.2 通用请求约定（✅ 已定；本节为已落地口径）
 
 **① 两种认证方式（按分区选用，⛔ 不混用）**
 
@@ -139,9 +129,9 @@
 
 - **触发范围**：`POST` / `PATCH` / `DELETE`（`GET`/`HEAD`/`OPTIONS` 不校验）。
 - **取值**：登录响应与 `GET /auth/me` 的 `csrf` 字段 → 放进请求头 `X-CSRF-Token`。
-- **豁免范围**：`POST /api/v1/auth/login` 与两个 `POST /api/v1/auth/captcha/*`（取题 / 验题）——它们都在**会话建立之前**运行，浏览器没有可借的环境权限。⛔ 这不是"跳过校验"，而是"没有可校验的对象"：实现上 `requireCsrf` 在**无会话时直接放行**（§4.1.1 ①）。⛔ 除这三者外，任何写请求都不得豁免。
+- **豁免范围（唯一口径）**：实现规则是**「无会话即放行」**——`requireCsrf` 在请求没有会话时直接通过；等价于只豁免**会话建立之前**的三个端点：`POST /api/v1/auth/login` 与两个 `POST /api/v1/auth/captcha/*`（取题 / 验题）。⛔ 这不是"跳过校验"，而是"没有可校验的对象"；⛔ 除这三者外，任何写请求都不得豁免（实现记录见 `docs/api-status.md` §3.1）。⚠️ 旧文「仅 `/auth/login` 豁免」的写法**已作废**。
 - **失败**：403 `csrf_invalid`，且**不销毁会话**（前端可重取 `me` 后重试）。
-- ⚠️ **`sid` 轮换（过 2FA / 改密 / 恢复码登录）后 `csrf` 不变**——前端无需换 token（✅ 决策 #32 的配套取舍，理由见 §4.1.1 ①）。
+- ⚠️ **`sid` 轮换（过 2FA / 改密 / 恢复码登录）后 `csrf` 不变**——前端无需换 token（✅ 决策 #32 的配套取舍，理由见 `docs/api-status.md` §3.1）。
 
 **③ 通用请求 / 响应格式**
 
@@ -151,15 +141,16 @@
 | 时间（面板 API） | 请求 `from`/`to` 接受 RFC3339（含时区）或 unix 毫秒整数；**响应时间一律 RFC3339 UTC**（如 `2025-09-25T12:00:00.000Z`） |
 | 时间（Agent 上报） | ✅ `ts` 为 unix 毫秒（设计 §10.1） |
 | 时区 | 服务端一律 UTC；本地化时区转换在前端 |
-| 分页 | ✅ 已定：`?limit=`（默认 20，上限 200）+ `?cursor=`（**不透明游标，keyset 分页**）；响应带 `next_cursor` |
+| 分页 | ✅ 已定：`?limit=`（默认 20，上限 200）+ `?cursor=`（**不透明游标，keyset 分页**）。⚠️ 例外（2026-10-04）：**状态类列表**（`GET /api/v1/hosts`）返回的是「当前态」而非按时间排列的事件流，排序键是**派生值**、不满足 keyset 前提 ⇒ 本期 `next_cursor` **恒为 `null`**、`cursor` 被忽略（形状仍合规，见 `docs/server-status-api.md` §2.8） |
+| **列表响应形状** | ✅ 已定（2026-10-04）：**所有列表端点**返回 `{ items: [...], next_cursor: string\|null }`，`next_cursor=null` 表示没有下一页。⚠️ 这是下面「响应体形状」一行的**唯一明确例外**——单个资源与写操作的响应仍直接返回对象 |
 | 排序 | 默认按时间倒序；需正序时 `?order=asc` |
 | 版本 | 路径前缀 `/api/v1`（✅）；破坏性变更升 `/api/v2` |
 | 请求 ID | 响应头 `X-Request-Id`；错误体里也有 `request_id`（对账 / 排障） |
 | 压缩 | 面板 API 支持 `Accept-Encoding: gzip`；Agent 上报使用 `Content-Encoding: gzip`（✅） |
-| **响应体形状** | 成功：**直接**返回数据对象或数组（⛔ 不套 `data` 壳）；失败：§1.3 的 `{ error: {...} }`；无内容的写操作：204 |
+| **响应体形状** | 成功：**直接**返回数据对象（⛔ 不套 `data` 壳）；**列表端点**见上面「列表响应形状」的例外；失败：§1.3 的 `{ error: {...} }`；无内容的写操作：204 |
 | 限流响应头 | `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset`、429 时 `Retry-After`（秒） |
 
-### 1.3 统一错误模型（➕ 建议；✅ 语义来自 §5.2「默认拒绝」）
+### 1.3 统一错误模型（✅ 已定；语义来自 §5.2「默认拒绝」，实现与 `server/src/utils/errors.js` 的登记表逐条一致）
 
 ```json
 {
@@ -174,7 +165,7 @@
 
 **HTTP 状态码使用规则**
 
-| 状态码 | 语义 | 典型 code |
+| 状态码 | 语义 | 代表 code（**完整清单以下方错误码总表为准**） |
 |---|---|---|
 | 200 | 成功 | — |
 | 201 | 创建成功（如创建 Agent / 规则） | — |
@@ -212,8 +203,8 @@
 | 401 | `session_expired` | 无 Cookie、sid 无效或已过期（会话已销毁） |
 | 401 | `invalid_credentials` | 登录名或密码不正确（⛔ 不区分"账号不存在/密码错/已禁用"） |
 | 403 | `role_denied` | 已登录但角色不足（`user` 发写请求，§4.9） |
-| 403 | `totp_required` | 已绑 2FA 但未过第二步（`totp_pending` 受限态，§4.1.1 ②） |
-| 403 | `totp_setup_required` | `security.require_2fa=true` 且该账号未绑定（`setup_required` 受限态，§4.1.1 ②） |
+| 403 | `totp_required` | 已绑 2FA 但未过第二步（`totp_pending` 受限态，见 §4.1.0） |
+| 403 | `totp_setup_required` | `security.require_2fa=true` 且该账号未绑定（`setup_required` 受限态，见 §4.1.0） |
 | 403 | `csrf_invalid` | 写请求缺 `X-CSRF-Token` 或不匹配（⛔ 不销毁会话） |
 | 404 | `not_found` | 资源不存在 / 路由未命中 |
 | 409 | `conflict` | 与当前状态冲突（含：2FA 已绑定还 setup、`require_2fa=true` 时自助解绑） |
@@ -226,18 +217,19 @@
 | 500 | `internal_error` | 未识别的服务端异常（细节只进日志，⛔ 不进响应） |
 | 503 | `upstream_unavailable` | PG / Redis 不可用 |
 
-### 1.4 限流（✅ 决策 #23、§5.2；数值为 ➕ 建议）
+### 1.4 限流（✅ 决策 #23、§5.2；标 ✅ 的数值为已落地默认值，env 可改）
 
-| 维度 | Redis 键 | 建议阈值 | 超限行为 |
+| 维度 | Redis 键 | 阈值 | 超限行为 |
 |---|---|---|---|
-| Agent 上报 | `ratelimit:agent:<agent_id>` | 周期性上报的 2–3 倍余量（如默认 15s 上报 → 60 次/分钟） | 429 + `Retry-After` |
-| 面板公开接口 | `ratelimit:public:<ip>` | 60 次/分钟 | 429 |
-| 公开 WS 连接 | `ratelimit:ws:<ip>` | 并发连接数上限（如 3）+ 连接建立速率 | 拒绝握手 |
-| 登录 | `ratelimit:login:<ip>` | 如 10 次/5 分钟，失败递增 | 429（不泄露账号是否存在）。✅ 已生效；✅ `/auth/2fa/verify` 与 `/auth/2fa/recovery/verify` **复用同一桶**（防 6 位码暴力枚举，见 §4.1.1） |
-| 滑块取题 / 验题 | `ratelimit:captcha:<ip>` | 30 次/分钟（比登录桶宽松——"换一张图"是正常操作） | 429。⛔ 与登录桶**独立**（否则换图会消耗登录额度）（S 系列已落地） |
-| 通知发送 | `notify:tokenbucket:<channel_id>` | 每通道独立令牌桶（✅ #23） | 排队等待，不丢弃 |
+| Agent 上报 | `ratelimit:agent:<agent_id>` | ✅ 60 次/分钟（`RATELIMIT_AGENT_PER_MINUTE` 默认值） | 429 + `Retry-After` |
+| 面板公开接口 | `ratelimit:public:<ip>` | ⏳ 提案 60 次/分钟 | 429 |
+| 公开 WS 连接 | `ratelimit:ws:<ip>` | ⏳ 提案：并发连接数上限（如 3）+ 连接建立速率 | 拒绝握手 |
+| 登录 | `ratelimit:login:<ip>` | ✅ 10 次 / 300s（`RATELIMIT_LOGIN_PER_WINDOW` / `RATELIMIT_LOGIN_WINDOW_S`） | 429（不泄露账号是否存在）。✅ `/auth/2fa/verify` 与 `/auth/2fa/recovery/verify` **复用同一桶**（防 6 位码暴力枚举） |
+| 人机验证取题 / 验题 | `ratelimit:captcha:<ip>` | ✅ 30 次/分钟（`RATELIMIT_CAPTCHA_PER_MINUTE`；比登录桶宽松——"换一张图"是正常操作） | 429。⛔ 与登录桶**独立**（否则换图会消耗登录额度）。⚠️ 极验分支下它同时是**唯一匿名外呼端点**的闸门，另有进程级出站并发上限（§4.1） |
+| 通知发送 | `notify:tokenbucket:<channel_id>` | ✅ 每通道独立令牌桶（#23） | 排队等待，不丢弃 |
 
-响应头（➕ 建议）：`X-RateLimit-Limit`、`X-RateLimit-Remaining`、`X-RateLimit-Reset`、`Retry-After`。
+✅ 已定（实现已落地）：`X-RateLimit-Limit`、`X-RateLimit-Remaining`、`X-RateLimit-Reset`、429 时 `Retry-After`。
+约定：`X-RateLimit-Reset` = 窗口重置的 **Unix epoch 秒**；`Retry-After` = 还需等待的**秒数**。
 
 ### 1.5 中间件顺序（✅ 设计 §5.2「顺序固定」+ §6.6）
 
@@ -309,27 +301,27 @@ tls(可选 mTLS)
 | 头 | 必需 | 说明 |
 |---|---|---|
 | `X-Agent-Id` | ✅ | Agent UUID |
-| `X-Agent-Key` | ✅ | Agent 凭证（`vk_` 前缀）。✅ 本轮修订：设计 §5.2 本来就要求校验它，本表此前遗漏 → 已补回。中心用 `agents.agent_key_hash`（HMAC-pepper）校验，**证明身份**；⛔ 命令行的 `--key` 形式仍永久禁止（决策 #37） |
+| `X-Agent-Key` | ✅ | Agent 凭证（`vk_` 前缀）。✅ 已定：设计 §5.2 本来就要求校验它，本表此前遗漏 → 已补回。中心用 `agents.agent_key_hash`（HMAC-pepper）校验，**证明身份**；⛔ 命令行的 `--key` 形式仍永久禁止（决策 #37） |
 | `X-Timestamp` | ✅ | unix 毫秒 |
-| `X-Nonce` | ✅ | 每请求唯一随机串（➕ 建议 ≥ 16 字节随机，32 hex 字符） |
+| `X-Nonce` | ✅ | 每请求唯一随机串（❓ 长度约定待拍板：建议 ≥ 16 字节随机、32 hex 字符；中心当前**不校验长度**） |
 | `X-Signature` | ✅ | HMAC-SHA256 十六进制小写 |
 | `Content-Encoding` | ✅ | `gzip` |
 | `Content-Type` | ✅ | `application/json` |
-| `User-Agent` | ➕ | `vantage-agent/<version>`，便于排障 |
+| `User-Agent` | ❓ | `vantage-agent/<version>`，便于排障（约定待拍板，见 `docs/api-status.md` §5.1） |
 
-**签名算法（✅ §6.2；✅ 本轮已定分隔符）**
+**签名算法（✅ §6.2；分隔符 ✅ 已定）**
 
 ```
 canonical  = method + "\n" + path + "\n" + timestamp + "\n" + nonce + "\n" + sha256_hex(raw_body)
 signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 ```
 
-- ✅ 已定（本轮）：**固定 `\n`（LF，0x0A）作为 4 处分隔符**，末尾**不加**换行；设计 §6.2 原文未指定分隔符，此处明确化（裸拼接存在边界歧义，如 `path` 尾部数字与 `timestamp` 粘接）。
+- ✅ 已定：**固定 `\n`（LF，0x0A）作为 4 处分隔符**，末尾**不加**换行；设计 §6.2 原文未指定分隔符，此处明确化（裸拼接存在边界歧义，如 `path` 尾部数字与 `timestamp` 粘接）。
 - `path`：**仅路径**（如 `/api/v1/agent/report`），⛔ 不含 host、⛔ 不含 query、⛔ 不含末尾斜杠差异（统一用路由原始路径）。
 - `raw_body`：**gzip 压缩之前**的原始 JSON 字节（✅ 决策 #19）。
 - `timestamp`：十进制 ASCII 的 unix 毫秒（无前导零、无引号）；`nonce`：ASCII 原样。
-- ⛔ 两端必须完全一致；该规范需配套**共享测试向量**（固定 secret/body/时间戳 → 期望签名值），Agent 与 core 各跑一遍。
-- 🔐 **两份凭证的分工（✅ 本轮修订）**：`X-Agent-Key` 由中心用 `agents.agent_key_hash`（HMAC-pepper 哈希）校验 → 证明**身份**；`agent_secret` 用于算 HMAC → 证明**完整性与时效**（中心侧从 `agents.agent_secret_enc` 的 AES-256-GCM 密文解出）。⚠️ 故 secret **必须可逆存储**：原 `agent_secret_hash`（只存哈希）在数学上无法验签，已改名 `agent_secret_enc`。`agent_key` / `agent_secret` 均**只上行一次**（创建/轮换响应），⛔ secret 永不作为请求头上行。
+- ✅ 已定：两端必须完全一致，且已有**共享测试向量** `contracts/agent-signature.json`（固定 secret/body/时间戳 → 期望签名值；含 `report` 与 `heartbeat` 两条）；Agent(Go) 与 core(Node) 的测试都必须逐字节消费该文件——「实现都对但拼法不同」这类 401 必须被向量测试挡住。
+- 🔐 **两份凭证的分工（✅ 已定）**：`X-Agent-Key` 由中心用 `agents.agent_key_hash`（HMAC-pepper 哈希）校验 → 证明**身份**；`agent_secret` 用于算 HMAC → 证明**完整性与时效**（中心侧从 `agents.agent_secret_enc` 的 AES-256-GCM 密文解出）。⚠️ 故 secret **必须可逆存储**：原 `agent_secret_hash`（只存哈希）在数学上无法验签，已改名 `agent_secret_enc`。`agent_key` / `agent_secret` 均**只上行一次**（创建/轮换响应），⛔ secret 永不作为请求头上行。
 
 **请求体（JSON，gzip）**
 
@@ -338,11 +330,11 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 | `agent_id` | string(uuid) | ✅ | 必须与 `X-Agent-Id` 一致，否则拒绝（✅ §6.4） |
 | `batch_id` | string(ULID) | ✅ | 幂等键，每批唯一（✅ 决策 #18） |
 | `ts` | int64 | ✅ | Agent 侧时间（unix 毫秒）；**仅用于漂移检测**（决策 #16） |
-| `seq` | int64 | ➕ | 单调递增序号，便于乱序诊断（设计示例含此字段） |
-| `host` | object | ✅ | `{ hostname, os, kernel, arch?, boot_time, capabilities }`；✅ 已定（本轮）：**能力声明随上报携带**——首次上报与能力变化时**必填**，其余可省；键集合建议 `{disk.inode, disk.io, net.conn_count, gpu.nvidia, gpu.amd, process.top, probe.ping, probe.http, probe.tcp, docker}` → 布尔值；⛔ 白名单外的键拒绝（400） |
-| `reported_ip` | string | ➕ | Agent 自测出口 IP（设计示例含；用于双源比对 §8） |
+| `seq` | int64 | 可选 | 单调递增序号，便于乱序诊断（设计示例含此字段） |
+| `host` | object | ✅ | `{ hostname, os, kernel, arch?, boot_time, capabilities }`；✅ 已定：**能力声明随上报携带**——首次上报与能力变化时**必填**，其余可省；键集合建议 `{disk.inode, disk.io, net.conn_count, gpu.nvidia, gpu.amd, process.top, probe.ping, probe.http, probe.tcp, docker}` → 布尔值；⛔ 白名单外的键拒绝（400） |
+| `reported_ip` | string | 可选 | Agent 自测出口 IP（设计示例含；用于双源比对 §8） |
 | `metrics` | object | ✅ | 见 §2.2 |
-| `probes` | array | ➕ | 本地探活结果，可为空数组（§4.6） |
+| `probes` | array | 可选 | 本地探活结果，可为空数组（§4.6） |
 
 **`metrics` 结构（✅ §10.1，单位见 `docs/database.md` §5.7.2）**
 
@@ -385,7 +377,7 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 { "ok": true, "server_ts": 1758800000123 }
 ```
 
-⛔ 响应体**只能**包含 `ok` 与 `server_ts`；不得出现 config / command / script / url / threshold / 任何可执行字段。✅ 已定（本轮）：幂等命中时**不加** `duplicate: true`——保持响应形态恒定，重复批次由中心日志与指标体现（Agent 也无需区分）。
+⛔ 响应体**只能**包含 `ok` 与 `server_ts`；不得出现 config / command / script / url / threshold / 任何可执行字段。✅ 已定：幂等命中时**不加** `duplicate: true`——保持响应形态恒定，重复批次由中心日志与指标体现（Agent 也无需区分）。
 
 **错误码**
 
@@ -408,7 +400,7 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 
 - ✅ 设计 §10.2：可并入 `report`；本文约定**允许**该端点，body 仅 `{agent_id, batch_id, ts, seq?}`，用途是「无变更时只报心跳」（§4.3 网络开销目标）。
 - 语义：更新 `last_seen_at`/`last_ip`/漂移，不写指标；其余（签名、幂等、响应体、错误码）与 `report` **完全一致**。
-- ➕ 建议：心跳单独设限流桶（间隔更长，如 60s），仍复用 `ratelimit:agent:<id>`。✅ 已定（本轮）：**保留该端点**（不并入 report），限流**共用** Agent 桶。
+- ✅ 已定：**保留该端点**（不并入 `report`），限流**共用** `ratelimit:agent:<id>` 桶。（"给心跳单独设更宽的桶"已作为提案列入 `docs/api-status.md` §5.1。）
 
 ### 2.3 ⛔ 明确不存在的接口（单向宗旨，✅ §2.1、§10.2）
 
@@ -438,13 +430,15 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 
 ⛔ 公开接口**绝不**返回：真实 IP、内网拓扑、`agent_key`/`secret`、其他 Agent 的内部标识、配置、阈值、审计信息（§5.4、决策 #21）。
 
-✅ 已定（本轮）：公开接口中的主机标识使用**独立的 `public_slug`**（`agents.public_slug`，创建 Agent 时生成的随机短 ID，与内部 UUID 无关，见 `docs/database.md` §5.1）——这满足了 §5.4「绝不泄露 key/内部 ID」，同时把 §10.2 的 `GET /api/public/hosts/:id/now` 中的 `:id` 明确为 **slug**。⛔ 公开列表**不返回内部 UUID**；`public_slug` 不随 `name`/`display_name` 变化。
-➕ 建议：公开视图的 `last_seen_at` 只暴露**相对化描述**（如 `"2 分钟前"`）或分钟级取整，避免精确到毫秒的行为指纹。
-➕ 建议：显示名优先取 `display_name`，其次 `name`（决策 #21「支持自定义显示名」）。
+✅ 已定：公开接口中的主机标识使用**独立的 `public_slug`**（`agents.public_slug`，创建 Agent 时生成的随机短 ID，与内部 UUID 无关，见 `docs/database.md` §5.1）——这满足了 §5.4「绝不泄露 key/内部 ID」，同时把 §10.2 的 `GET /api/public/hosts/:id/now` 中的 `:id` 明确为 **slug**。⛔ 公开列表**不返回内部 UUID**；`public_slug` 不随 `name`/`display_name` 变化。
+✅ 已定（2026-10-04，D3）：公开视图的**每机绝对时间**一律**分钟级取整**（`floor(epoch/60)*60`，`last_seen_at` 的秒位恒为 `00`），并**额外**给出中文相对化文案 `last_seen_ago`。两者**都不得**精确到秒——秒级时间戳 + 轮询足以把公开页变成「主机上下线行为指纹」分析器。私有接口（§4.2）**不做**这个取整（那里的 `last_seen_at` 是精确值，用于排障）。
+✅ 已定（2026-10-04，D-名）：显示名优先取 `display_name`，其次 `name`（决策 #21「支持自定义显示名」）。⚠️ 设计稿曾建议"缺失时回退泛化名（如「主机 3」）"，**本方案不采纳**：`name` 本身就是运维自己起的别名（不是主机名），回退它不泄露任何东西，而泛化名需要前端按序号生成、还会让同一台机在两处显示不同。决议索引 `docs/server-status-api.md` §11。
 
-### 3.2 端点（✅ §10.2；全部 ⏳ 未实现，M2）
+### 3.2 端点（✅ §10.2；`summary` 与 `hosts` 已落地 2026-10-04，`probes` 与 `hosts/{slug}/now` 仍 ⏳）
 
-四个端点**都无请求参数**（除路径参数）、**都免登录**、响应都是**直接的对象/数组**（不套壳）。
+四个端点**都无请求参数**（除路径参数）、**都免登录**，**都受总开关 `public_view.enabled` 约束**（关闭 → 一律 404 `not_found`）。返回形状：`hosts` 与 `probes` 是**列表端点** → `{ items: [...], next_cursor: null }`（§1.2 ③；状态类接口本期**没有真游标**，见 `docs/server-status-api.md` §2.8，⛔ 但形状必须合规）；`summary` 与 `hosts/{slug}/now` 是**单个对象**，直接返回（不套壳）。
+
+**限流**：`ratelimit:public:<ip>`，默认 60 次/分钟（`RATELIMIT_PUBLIC_PER_MINUTE`）。⚠️ 它与登录桶、Agent 桶**完全独立**。**执行顺序固定**：限流 → 总开关 → 缓存/查询（⛔ 不能把总开关放在限流之前，否则被关闭期间的扫描不计数）。
 
 #### `GET /api/public/summary` — 汇总计数
 
@@ -453,50 +447,92 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `total` | number | 主机总数 |
-| `online` / `offline` | number | 在线 / 离线数 |
-| `alerts` | object | `{ critical, warn, info }` 各严重级当前告警数 |
-| `updated_at` | string(RFC3339) | 快照生成时间 |
+| `online` / `offline` | number | 在线 / 离线数（⛔ `disabled` **不计入**这两个） |
+| `disabled` | number | ➕ 2026-10-04 补齐（原表漏了它，但设计稿顶栏「禁用 1」需要）；✅ `total = online + offline + disabled` |
+| `alerts` | object | `{ critical, warn, info }` 各严重级当前告警数。⚠️ **本期恒为 0**：告警引擎（M3）未实现，接口按契约查询 `alert_events` 而非硬编码 0，M3 落地后本字段自动变正确 |
+| `updated_at` | string(RFC3339) | 快照生成时间（= 服务端缓存生成时刻） |
 
 #### `GET /api/public/hosts` — 主机列表
 
-**200**：数组，每项字段如下（⛔ 无内部 UUID、无 IP）：
+**200**：`{ items: [...], next_cursor: null, updated_at }`（§1.2 ③），每项字段如下（⛔ 无内部 UUID、无 IP）：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `slug` | string | **公开标识**（`agents.public_slug`，见 §3.1） |
 | `name` | string | 显示名优先取 `display_name`，其次 `name`（决策 #21） |
-| `status` | string | `online` / `offline` |
-| `os` | string? | 操作系统 |
-| `uptime` | number? | 运行时长 |
-| `snapshot` | object | `{ cpu_pct, mem_pct, disk_pct, net_rx_bps, net_tx_bps, gpu_pct? }` |
-| `probes` | object | `{ up, down }` 计数 |
-| `last_seen_ago` | string | **相对化描述**（如 `"2 分钟前"`）或分钟级取整（➕ 建议，避免毫秒级行为指纹） |
+| `status` | string | `online` / `offline`。⛔ **不出现** `disabled`（人工禁用是内部运营信息）；⚠️ 由**读取时推导**（`last_seen_at` 与阈值比较），⛔ 不是直接读 `agents.status` —— 否则 cron 静默失效时接口会开始"报平安" |
+| `os` | string? | 操作系统；缺失时**字段缺省**（⛔ 不是 null） |
+| `uptime` | number? | 运行时长（秒，由 `host_info.boot_time` 推导）；缺失时字段缺省 |
+| `snapshot` | object | `{ cpu_pct, mem_pct, disk_pct, net_rx_bps, net_tx_bps, gpu_pct? }`；**无数据一律 `null`**（⛔ 不补 0 —— 那是把"失联"显示成"空闲"）；`gpu_pct` 在无 GPU 序列时整键缺省 |
+| `probes` | object | `{ up, down }`：该机**最近一轮**探活结果；从未探活 → `{ "up": 0, "down": 0 }` |
+| `last_seen_ago` | string \| null | 相对化文案（`刚刚` / `N 分钟前` / `N 小时前` / `N 天前` / `超过 30 天`）。⚠️ `disabled` 或**从未上报**时为 `null`（⛔ 不编造"超过 30 天"） |
+| `last_seen_at` | string(RFC3339) \| null | **分钟级取整**后的绝对时间（见 §3.1 的 ✅ 口径）；从未上报为 `null` |
+
+**排序**：与私有列表（§4.2）**同一套**「有问题优先」——非在线（`offline`）在前 → 有活动告警的在前 → 在线 → `last_seen_at DESC` 兜底。⛔ 两边不得各排各的（同一批主机在两个页面上顺序必须一致）。
+
+**缓存**：整个响应体缓存 `PUBLIC_CACHE_TTL_S`（默认 10s）于 Redis `snapshot:public:hosts`；命中时 `updated_at` = 缓存生成时刻。⚠️ 缓存的是**已脱敏**的响应（⛔ 绝不缓存含 IP / 内部 UUID 的内容）。
 
 #### `GET /api/public/hosts/{slug}/now` — 单机当前快照
 
-**路径参数**：`slug`（公开标识，**不是**内部 UUID）。
-**200**：同上的 `snapshot` **展开** + 分区 / 网卡 / GPU 数组。
-⛔ 不含 IP、不含设备内网标识；设备名建议泛化为 `disk 1..n` / `eth 1..n`（➕ 建议）。
+**路径参数**：`slug`（公开标识，**不是**内部 UUID）。形状不合法（不符合 8–12 位公开字符集）→ 400 `schema_invalid`；**不存在**或该机**已被人工禁用** → 同一個 404 `not_found`（⛔ 两者不可区分，否则 slug 成了"这台机是否被禁用"的枚举口子）。
+
+**200**：列表条目字段（§3.2 上一张表，卡片可直接复用）+ 展开块：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `cpu` | object | `{ usage_pct, load1, load5, load15, ctx_switch }`，缺失为 `null` |
+| `memory` | object | `{ total_bytes, used_bytes, used_pct, available_bytes, cached_bytes, buffers_bytes }` |
+| `disks[]` | object[] | 每行 `{ label, total_bytes, used_bytes, used_pct, inode_used_pct, read_bps, write_bps, read_iops, write_iops, latency_ms }` |
+| `networks[]` | object[] | 每行 `{ label, rx_bps, tx_bps, rx_total_bytes, tx_total_bytes, conn_count, err, drop }` |
+| `gpus[]` | object[] | 每行 `{ label, util_pct, mem_used_bytes, mem_total_bytes, temp_c, power_w }` |
+| `updated_at` | string | 快照生成时刻（命中缓存时 = 缓存生成时刻） |
+
+✅ **设备名泛化口径（已定，2026-10-04；原 §3.1 的 ❓ 已闭环）**：`label` 由**服务端**生成 ——
+磁盘按 `mount`（无 mount 时按 `device`）**字典序**编号成 `磁盘 1..n`、网卡按 `device` 编号成 `网卡 1..n`，
+GPU 用 `index`（本身就是稳定序号）→ `GPU 1..n`。
+⛔ **响应里一个指标名都不出现**（没有 `disk.used_pct{mount=/data}` 这种键），
+⛔ 设备名、挂载点、路径、端口一律不下发 —— 将来给 `metrics_raw` 加维度也不可能顺着这条路漏出去（白名单式构造）。
+⚠️ 编号只保证**同一批数据内稳定**（同一次响应的字典序一致）；设备增删会让编号整体平移，这是刻意取舍（⛔ 不做持久化映射表）。
+
+**错误**：400 `schema_invalid`（slug 形状非法）｜404 `not_found`（不存在 / 已禁用 / 总开关关闭）
 
 #### `GET /api/public/probes` — 探活当前概览
 
-**200**：数组 `[{ slug, name, target_host, type, up, latency_ms, checked_at }]`，其中 `target_host` **脱敏**（仅域名 / 泛化形式）。
+**200**：`{ items: [...], next_cursor: null, truncated: boolean, updated_at }`，每项：
 
-**缓存与限流（✅ §5.4「带缓存与限流」；➕ 参数为建议）**
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `slug` / `host_name` | string \| null | 该探活属于哪台机（公开标识与显示名） |
+| `name` | string | **探活名**（Agent 本地 `config.yaml` 里的名字，如「网关」「官网」） |
+| `target_host` | string \| null | **脱敏后的目标**，见下 |
+| `type` | string | `ping` / `http` / `https` / `tcp` / `dns` |
+| `up` | boolean | 最近一轮是否可达 |
+| `latency_ms` | number \| null | |
+| `checked_at` | string \| null | 探活时刻（**精确值**：探活不参与"主机上下线"指纹，故不做分钟级取整） |
 
-- 服务端缓存：`snapshot:agent:<id>`（TTL 5–15s，与上报周期 15s 对齐）；
+✅ **`target_host` 脱敏口径（已定，2026-10-04）**：
+URL → **只留主机名**（⛔ 去掉路径/查询串/端口）；`host:port` → 去掉端口；域名 → 原样；
+**私网/保留 IP（RFC1918 / CGNAT / ULA / 回环 / 链路本地）→ 固定文案 `内网地址`**；
+**公网 IP → 原样**（解析域名同样能得到，隐藏只会让公开页变成一排「—」）；解析不出来 → `null`（⛔ 不回显原串）。
+
+⚠️ 只列**非禁用**主机、只取每机**最近一轮**；条数上限 500，被截断时 `truncated: true`（⛔ 不静默丢数据）。
+
+**缓存与限流（✅ §5.4「带缓存与限流」；下列参数为 ❓ 提案，决议索引 `docs/api-status.md` §5.2）**
+
+- 服务端缓存（✅ 2026-10-04 定，D4）：**响应级**缓存 —— `/api/public/hosts` → `snapshot:public:hosts`、`/api/public/summary` → `snapshot:public:summary`，TTL = `PUBLIC_CACHE_TTL_S`（默认 **10s**，0 = 关闭）。⚠️ 契约原文写的 `snapshot:agent:<id>`（**每机**粒度）与"全量列表"端点不匹配（按机缓存会退化成 N 次读取），故改用响应级；`snapshot:agent:<id>` 至今无写入方，保留给将来的 `/ws/*` 实时扇出。⚠️ 缓存读/写失败一律**不影响响应**（读失败按未命中、写失败只 warn）。
 - 响应头：`Cache-Control: no-store`（避免中间层/CDN 缓存过期或跨用户数据）；
 - 限流：`ratelimit:public:<ip>`，建议 60 次/分钟；
-- 整体开关：`public_view.enabled`（✅ §5.4）；✅ 已定（本轮）：**默认开启**（装好即可免登录查看当前状态，符合决策 #10 初衷）；关闭时**所有** `/api/public/*` 与 `/ws/public` 返回 404（不泄露「存在但被关闭」）。
+- 整体开关：`public_view.enabled`（✅ §5.4）；✅ 已定：**默认开启**（装好即可免登录查看当前状态，符合决策 #10 初衷）；关闭时**所有** `/api/public/*` 与 `/ws/public` 返回 404（不泄露「存在但被关闭」）。
 - ⚠️ 默认开启的配套要求（必须同时做到）：① 公开接口与 `/ws/public` 按 IP **严格限流**（`ratelimit:public:*`、`ratelimit:ws:*`）；② 严格脱敏（§3.1 的 ⛔ 清单）；③ 设置页给出醒目状态与「一键关闭」；④ 首次登录后引导复核该开关（`docs/frontend.md` §4.6）。
 
 ---
 
 ## 4. 面板私有 API（`/api/v1/*`，需登录）
 
-### 4.1 认证与会话（13 个端点，✅ 全部已落地）
+### 4.1 认证与会话（13 个端点）
 
-**本节 13 个端点全部已落地**（B4/B5 会话与改密、B6/B7 2FA、S 系列人机验证）；⏳ 待 Owner 跑 `npm test` 验收（人机验证的集成用例在 `server/test/auth.captcha.test.js`）。内部机制（Redis 键、三态矩阵、防重放、待拍板项）见 §4.1.1。
+> **落地状态**：本节 13 个端点全部已落地（B4/B5 会话与改密、B6/B7 2FA、S 系列人机验证）——⏳ 待 Owner 跑 `npm test` 验收；分块记录、验收清单与行为细则见 `docs/api-status.md` §2、§3。
+> **内部机制**（Redis 键、三态矩阵、防重放）见 `docs/api-status.md` §3（原 §4.1.1 已迁出，见本节末尾指针）。
 
 #### 4.1.0 本节通用约定
 
@@ -507,9 +543,9 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 | 生命周期 | 滑动 30min（每次命中续期）+ **绝对 24h**（自 `created_at` 起算，续期不影响）；同账号并发上限 3（超限**踢最旧**，新建的那个永不参与淘汰）；IP/UA **只记录不强制校验** |
 | CSRF | 本节所有写请求都要 `X-CSRF-Token`；**豁免仅限会话建立前的三个端点**（`login` + 两个 `captcha/*`，详见 §1.2 ②） |
 | 登录失败 | 统一 401 `invalid_credentials`（**不区分**账号不存在 / 密码错 / 已禁用），且计入 `ratelimit:login:<ip>`；同时 INCR 两个失败计数器并在响应里带 `captcha_required` 提示（S） |
-| 人机验证 | **首次登录不要求**；一旦出现密码错误，同 IP / 同账号失败计数 ≥ `security.login_captcha.after_failures`（默认 1）→ 后续登录必须携带 `captcha_token`。⚠️ 与三态矩阵**正交**：它只决定"这次登录请求能不能进入验密环节"，⛔ 不改变 `full`/`totp_pending`/`setup_required` 的判定。✅ **默认提供方已是极验 v4（S7 已落地）**，自建滑块保留为可选 provider（`CAPTCHA_PROVIDER=selfbuilt`）。⚠️ 两个提供方在**本表**上的差异只有两处：① `captcha/challenge` 的响应体（自建回两张 SVG；极验回 `provider`+`captcha_id`+`product`+`language`）；② `captcha/verify` 的**请求体**与 `details.reason` 枚举。⛔ 登录端点的请求/响应**一个字都不改**（§4.1 两个端点有逐字段对照） |
+| 人机验证 | **首次登录不要求**；一旦出现密码错误，同 IP / 同账号失败计数 ≥ `security.login_captcha.after_failures`（默认 1）→ 后续登录必须携带 `captcha_token`。✅ **登录成功后两个计数清零**（2026-10-04 决策 A）：闸门在验密之前，不清零会让窗口内"错过一次"的账号**每次**登录都被要求验证（哪怕密码这次是对的）。⚠️ 与三态矩阵**正交**：它只决定"这次登录请求能不能进入验密环节"，⛔ 不改变 `full`/`totp_pending`/`setup_required` 的判定。✅ **提供方由 `CAPTCHA_PROVIDER` 决定（2026-10-04 追认）**：取值 `geetest` / `selfbuilt` / `none`；**未设置时自动推断**（配了极验密钥 → `geetest`，否则 → `selfbuilt`）；**显式声明 `geetest` 却缺密钥 → 启动即失败**（⛔ 不允许"声明用极验却静默放行"）。⚠️ `none` = 整条链路关闭（出题 / 验题 404、登录永不被要求人机验证）：它是 **env 级、面板不可见**的部署期总闸；正常关闭人机验证请用设置项 `security.login_captcha.enabled=false`（面板可改、有审计）。⚠️ 旧文「默认即 `geetest`、既有部署升级会因缺密钥启动失败」**已作废**。⚠️ 两个提供方在**本表**上的差异只有两处：① `captcha/challenge` 的响应体（自建回两张 SVG；极验回 `provider`+`captcha_id`+`product`+`language`）；② `captcha/verify` 的**请求体**与 `details.reason` 枚举。⛔ 登录端点的请求/响应**一个字都不改**（§4.1 两个端点有逐字段对照） |
 
-**会话三态与各端点的可达性**（✅ 与代码一致；判定规则见 §4.1.1 ②）：
+**会话三态与各端点的可达性**（✅ 已定，2026-10-04 按代码校正；判定规则与实现记录见 `docs/api-status.md` §3.2）：
 
 | 端点 | `full` | `totp_pending`（已绑未过第二步） | `setup_required`（策略要求未绑定） |
 |---|---|---|---|
@@ -524,7 +560,8 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 | `password` | ✅ | ⛔ 403 `totp_required` | ⛔ 403 `totp_setup_required` |
 | `logout` / `logout-all` | ✅ | ✅ | ✅（⛔ 不能把人锁死在面板里） |
 
-> ✅ 强制策略：`security.require_2fa=true` 时，未绑定 TOTP 的账号登录后进入 `setup_required` 受限态，只放行 `me` / `2fa/setup` / `2fa/enable` / `logout*`，其余一律 403 `totp_setup_required`；⛔ 不允许跳过。
+> ✅ 强制策略：`security.require_2fa=true` 时，未绑定 TOTP 的账号登录后进入 `setup_required` 受限态，只放行 `2fa/setup` / `2fa/enable` / `logout*`，其余一律 403 `totp_setup_required`；⛔ 不允许跳过。
+> ⚠️ 两处**必须知道的例外**（见上表）：① `me` 在 `setup_required` 态返回 **403**——前端 `refreshMe()` 正是靠它进入强制绑定流程（旧文把它写进"放行"列表，已作废）；② `2fa/verify` 与 `2fa/recovery/verify` **没有状态守卫**，请求直达服务层，对未绑定账号返回 **409 `conflict`**（不是 403）。
 > ⚠️ 上表**不含**两个 `captcha/*` 端点：它们在**会话建立之前**运行，与会话状态无关（⛔ 不受三态矩阵约束，见 §4.1）。
 
 ---
@@ -544,7 +581,7 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 |---|---|---|---|
 | `username` | string | ✅ | 1–128；**大小写不敏感**（按 `lower(username)` 匹配）；响应回显库内原始写法 |
 | `password` | string | ✅ | 1–128 |
-| `captcha_token` | string | ➕ | ≤128；⛔ 仅在服务端要求时必需（见下）；来自 `POST /auth/captcha/verify`（S） |
+| `captcha_token` | string | 条件 | ≤128；⛔ 仅在服务端要求时必需（见下）；来自 `POST /auth/captcha/verify` |
 
 **成功 200**（同时下发 `Set-Cookie: vantage_sid=<sid>`）
 
@@ -643,10 +680,10 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 |---|---|---|---|
 | `captcha_id` | string | ✅ | ≤128 |
 | `x` | number | ✅ | 逻辑坐标（0 ≤ x ≤ width） |
-| `y` | number | ➕ | 仅横向滑动时可省 |
+| `y` | number | 可选 | 仅横向滑动时可省 |
 | `track` | array | ✅ | `[[t_ms, x], …]`，**点数上限 200**（防超大 body） |
 
-**请求体（`provider=geetest`）** = 极验 `captchaObj.getValidate()` 的 4 个字段
+**请求体（`provider=geetest`）** = 极验 `captchaObj.getValidate()` 的字段
 
 | 字段 | 类型 | 必需 | 约束（**防御性护栏**，不是极验契约） |
 |---|---|---|---|
@@ -654,8 +691,13 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 | `captcha_output` | string | ✅ | ≤4096 |
 | `pass_token` | string | ✅ | ≤2048 |
 | `gen_time` | string | ✅ | ≤32 |
+| `captcha_id` | string | 可选 | ≤128。⚠️ 极验**会**带上它 —— 见下方说明；服务端**放行但不读** |
 
-⚠️ 极验分支**刻意不收 `captcha_id`**：服务端用自己的配置值 —— 让调用方指定"用哪个验证 id"没有意义，只会多一个可被拿来探测/伪造的输入面。
+⚠️ **`getValidate()` 返回的不止那 4 个字段**（2026-10-04 实测）：它是极验客户端 `POST https://gcaptcha4.geetest.com/verify` 响应里 `data.seccode` 的**原样对象**，键序 `captcha_id, lot_number, pass_token, gen_time, captcha_output`。
+- 因此 `captcha_id` **必须在白名单里**：否则"把 `getValidate()` 原样转发"的客户端会被 400 `schema_invalid` 挡死（真实故障：验题永远失败 → 登录永远 400 `captcha_required`）。
+- 但服务端**不读**它：出站二次校验用的是服务端配置里的 `captchaId`，且走 URL query（`server/src/utils/geetest.js` 的 `buildValidateUrl`）—— 所以**不存在**「调用方指定用哪个验证 id」的输入面。
+- ⛔ `additionalProperties: false` **保持不变**：只放行这一个已知的厂商字段，其它多余字段（探测/伪造）照旧被拒（回归用例 AC-G5c）。
+- 🔑 前端仍应**显式挑字段**（`web/src/utils/geetest.ts` 的 `toVerifyBody()`）：白名单的收口点在服务端，前端不留"厂商再加字段就再炸一次"的隐患。
 
 **成功 200（两个提供方**完全一致**）**
 
@@ -681,6 +723,7 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 - **token 绑定 IP**：换 IP 使用同一 token → 400 `captcha_invalid`（挡"打码平台批量出 token 转卖"）。
 - ⛔ 前端**不得**自行判定对错（前端判对错＝纯前端验证码，零防护价值）。极验的 `onSuccess` 同样必须经服务端 `/validate` 才算数。
 - **失败模式（极验）**：`/validate` 请求异常或 HTTP 非 200 时，按 `GEETEST_FAIL_MODE` 处理 —— 默认 **`open`（放行 + 审计 + error 日志 + 30s 熔断）**，`closed` 则 503。完整论证见 `docs/geetest-captcha.md` §9。
+- ✅ 已定（2026-10-04）：**进程级出站并发上限**。本端点是全站唯一「匿名可触发外呼」的端点，单靠 `ratelimit:captcha:<ip>` 挡不住多 IP 分布调用；超限时**不再干等 3s 超时**，直接按 `GEETEST_FAIL_MODE` 处理（`open` → 放行 + 审计；`closed` → 503 `captcha_unavailable`）。实现记录见 `docs/api-status.md` §3.6（S9）。
 - 自建的完整阈值、容差与"不泄露答案"的写法见 `docs/slider-captcha-selfbuilt.md` §6；极验的参数、签名与响应解析见 `docs/geetest-captcha.md` §4。
 
 #### `POST /api/v1/auth/2fa/verify` — 登录第二步（TOTP）✅ 已实现
@@ -714,7 +757,7 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 **备注**
 
 - ✅ **成功后 `sid` 必须轮换**（决策 #32，防会话固定）；`csrf` 不变。
-- ✅ **同一步号只接受一次**：命中步号先经 Redis `SADD totp:used:<uid>`（TTL 90s）原子认领，`SADD` 返回 0 即判重放（§4.1.1 ④）。
+- ✅ **同一步号只接受一次**：命中步号先经 Redis `SADD totp:used:<uid>`（TTL 90s）原子认领，`SADD` 返回 0 即判重放（`docs/api-status.md` §3.3）。
 - 前端：`totp_required:true` 后所有其它接口都 403，UI 必须留在登录流程内；验证成功后**重新调 `GET /auth/me`** 拿 `user`/`roles` 再跳转（`docs/frontend.md` §4.2）。
 - ⛔ 不写 `touchLogin`：`users.last_login_method` 的 CHECK 只允许 `password/totp/oidc`，且第一步已记录本次登录。
 
@@ -737,7 +780,7 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 | `session.ua` | string \| null | User-Agent（截断 ≤200 字符） |
 | `csrf` | string | 与登录响应同源；`sid` 轮换后不变 |
 
-**错误**：401 `session_expired`｜**403 `totp_setup_required`**（`setup_required` 态**必须**回 403——前端 `store/auth.ts` 靠它进入强制绑定流程，见 §4.1.1 ⑧ D2）
+**错误**：401 `session_expired`｜**403 `totp_setup_required`**（`setup_required` 态**必须**回 403——前端 `store/auth.ts` 靠它进入强制绑定流程，见 §4.1.0 三态矩阵）
 
 **备注**：`totp_pending` 态下 `me` **正常 200**（前端据此恢复会话但留在登录流程内）；会话有效但账号已被删除时 → 销毁会话、清 Cookie、回 401。
 
@@ -817,7 +860,7 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 |---|---|---|
 | 401 | `session_expired` | 无会话 |
 | 403 | `csrf_invalid` | 缺 CSRF |
-| 409 | `conflict` | **该账号已绑定 2FA**（⛔ 允许换绑=用密码绕过 2FA；自救走恢复码或管理员重置，见 §4.1.1 ⑧ D7） |
+| 409 | `conflict` | **该账号已绑定 2FA**（⛔ 允许换绑=用密码绕过 2FA；自救走恢复码或管理员重置，见 `docs/api-status.md` §4.1 D7） |
 
 **备注**：`setup` 只写"待确认密钥"（`totp_enabled` 保持 `false`），⛔ **未通过 `enable` 前不生效**；未绑定时重复 setup 会覆盖上一次的待确认密钥（无副作用）。
 
@@ -914,215 +957,138 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 
 **备注**：**整批替换**——旧码在事务内被删除、立即失效（前端须提示"旧恢复码已全部作废"）。
 
-**SSO（OIDC）本期不做，仅预留（✅ 本轮决策）**
+**SSO（OIDC）本期不做，仅预留（✅ 已定）**
 
 - `users` 表已预留 `oidc_issuer` / `oidc_subject` / `oidc_email` / `oidc_linked_at` / `oidc_last_sync_at`（见 `docs/database.md` §5.3）；本期**不实现** OIDC 流程，**不开放** `/api/v1/auth/oidc/*` 端点。
 - 预留形态（后续对接时按此实现）：`GET /api/v1/auth/oidc/start`（302 跳 IdP authorize，携带 `state` + `nonce` + PKCE）、`GET /api/v1/auth/oidc/callback`（校验 `state` 与 `id_token` → 按 `(oidc_issuer, oidc_subject)` 定位 `users` → 复用同一套 Redis `sid` 会话机制）、`POST /api/v1/auth/oidc/link` / `unlink`（已登录用户自助绑定/解绑）。
 - ❓ 后续待定：是否允许 SSO 自助注册、IdP 的 group/role claim 如何映射到 `admin`/`user`（`docs/database.md` §12.2 N3）。
 - ⛔ 红线：OIDC 只用于**面板登录**，不得成为「向 Agent 下发」的通道（`docs/api.md` §2.3、设计 §18.3）。
 
-#### 4.1.1 实现规范与落地状态（2026-10-02 定稿）
-
-> 本节是**契约级落地清单**（不含代码）：把 §4.1 的契约展开到「Redis 键 / 状态判定 / 错误码 / 依赖 / 落地顺序」这一层，供实现与验收逐条对照。
-> **怎么读**：标【✅ 已生效】的是当前代码的真实行为（以本节为准）；标【⏳】的是已定稿、尚未落地（或部分落地）的方案。落地进度总表见 ⑦，开放决策见 ⑧。
-
-**① 会话模型【✅ 已生效】（Redis；键空间见 `docs/database.md` §7，⛔ 不新增用途前缀）**
-
-| 键 | 结构 | TTL | 字段 |
-|---|---|---|---|
-| `session:<sid>` | hash | 滑动 30min + 绝对 24h | `user_id`、`roles`（JSON 数组串，恒 `["admin"]`/`["user"]`）、`totp_ok`、`setup_required`、`created_at`、`last_seen`、`ip`、`ua`（截断 ≤200 字符）、`csrf` |
-| `user_sessions:<uid>` | set | 同会话 | 该用户全部 sid（限并发 `SESSION_MAX_PER_USER`=3、踢最旧、全部下线） |
-
-- Cookie：名取 `config.security.session.cookieName`（默认 `vantage_sid`），`HttpOnly + SameSite=Lax + Path=/ + Max-Age=绝对 TTL`，`Secure` 由 `COOKIE_SECURE` 决定。
-- `last_seen` 仅在距上次写入 > 60s 时更新（否则每个请求一次 Redis 写）。
-- **集合自愈**：每次登录都会整理 `user_sessions:<uid>` —— ① 清掉「hash 已过期但成员还在」的僵尸 sid（Redis 过期只删键，没人负责 `SREM`，不清理会让集合随"登录→闲置过期→再登录"无界增长）；② 存活会话超过上限则踢最旧。⛔ 新建的那个 sid 永不参与淘汰（同毫秒创建时"最旧"可能就是它自己）。
-- **轮换**（✅ 决策 #32）：过 2FA、改密、恢复码验证成功 → 新建 sid + 删旧 sid + 原子替换 `user_sessions` 成员，响应重新下发 Cookie；⛔ `csrf` **不随轮换改变**（防的是会话标识被固定；跟着换会让返回 204 的接口来不及把新 csrf 交给前端，自伤成"后续写请求全 403"）。
-- CSRF：会话 hash 内 `csrf` 与请求头 `X-CSRF-Token` 双提交比对；⛔ 仅 `/auth/login` 豁免（此时无会话，前端 `skipCsrf` 已按此实现）。
-
-**② 三态矩阵（受限态判定）【✅ 已生效】**
-
-| 状态 | 判定 | 放行 | 其余接口 |
-|---|---|---|---|
-| `full` | `totp_ok=1` | 全部 | — |
-| `totp_pending` | 已绑 TOTP 但未过第二步 | `me`、`2fa/verify`、`2fa/recovery/verify`、`2fa/setup`、`logout*` | 403 `totp_required` |
-| `setup_required` | `security.require_2fa=true` 且该账号 `totp_enabled=false` | `me`、`2fa/setup`、`2fa/enable`、`logout*` | 403 `totp_setup_required` |
-
-> ❓ D2：`me` 在受限态**返回 403**（而非 200）——面板 `web/src/store/auth.ts` 的 `refreshMe()` 正是靠捕获 `totp_setup_required` 进入强制绑定流程；此处与 §4.1 原文「放行 `auth/me`」的字面表述有差异，按 D2 结论统一。
-> ❓ D7：矩阵里 `totp_pending` 放行列表中的 `2fa/setup` 指"**可达**"（不因状态 403），但服务层对**已绑定账号**一律 409 `conflict`——放行 ≠ 会成功；否则"换绑再自验"就是 2FA 绕过（详见 ⑧ D7）。`2fa/enable` 在 `totp_pending` 态**不**放行（403 `totp_required`，⛔ 重复绑定）。
-> `security.require_2fa` 的读取：新增**最小** `services/settings.service.js`（四个白名单 key 的默认值 + `getBool()`，带 `settings:cache` TTL 30s，缺行取默认）；M3 的 `PATCH /api/v1/settings`（§4.10）直接复用，不返工。
-
-**③ 错误码【✅ 已生效】**（⛔ 不得改名，前端 i18n 与错误映射已就位）：`invalid_totp`（400）、`totp_setup_required`（403）。
-
-**④ Redis 键【✅ 已生效】**：`totp:used:<user_id>`（TTL 90s）—— 同一 TOTP 步号只接受一次，防 30s 窗口内重放同一验证码（SET 结构存步号集合，`enable` 与 `2fa/verify` 共用；见 ⑨ 防重放条）。
-✅ **S 系列已新增 4 个键**（已登记进 `docs/database.md` §7）：`captcha:<captcha_id>`（题目与答案，TTL 120s）、`captcha:ok:<captcha_token>`（一次性凭证，值绑定 IP，TTL 120s）、`login:fail:ip:<ip>` 与 `login:fail:acct:<sha256(用户名)[:16]>`（失败计数，TTL = 登录窗口 `loginWindowS`）；另有独立限流桶 `ratelimit:captcha:<ip>`。
-
-**⑤ TOTP 与恢复码【✅ 已生效（B1 原语 + B6/B7 端点）】（零依赖自研，`node:crypto`；二维码渲染用 `qrcode`，server/ 已安装）**
-
-- 密钥：20 字节随机 → RFC 4648 Base32；`otpauth_uri` = `otpauth://totp/Vantage:<username>?secret=…&issuer=Vantage&algorithm=SHA1&digits=6&period=30`（label 需 URL 编码）。
-- 校验：容 ±1 步（时钟漂移）+ 常量时间比较；实现自测用 **RFC 6238 Appendix B 官方向量**（明文 `12345678901234567890` → Base32 `GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ`；`T=59 → 287082`、`T=1111111109 → 081804`）——向量不符时**修实现**，不放宽断言。
-- `totp_secret_enc`：AES-256-GCM，AAD = `totp-secret:<user_id>`（与 `agentSecretAad` 同理，防密文跨用户搬运）。
-- 恢复码：固定 10 个、每个 10 字符 Base32（去易混 `0/O/1/I`）、展示形如 `XXXXX-XXXXX`；库里**只存** `HMAC-SHA256(SECRET_KEY, "vantage:recovery:" + 归一化码)` 的哈希；重新生成＝整批替换（旧码立即作废）；使用＝置 `used_at`（用后即废）。
-- `qr_svg`：服务端用 `qrcode` 渲染 SVG。✅ `server/` 已安装 `qrcode@^1.5.4`（本模块唯一新增运行时依赖）。
-
-**⑥ 首管员与离线救援 CLI【✅ 已落地】**（否则 `users` 为空、无人能登录）：`server/scripts/create-user.js`，风格对齐 `scripts/create-agent.js`：
-
-```
-node scripts/create-user.js --username admin --role admin --password-stdin   # 建首个管理员
-node scripts/create-user.js --list                                          # ⛔ 不返回 password_hash / totp_secret_enc
-node scripts/create-user.js --reset-password <username> --password-stdin
-node scripts/create-user.js --reset-2fa <username>                          # 离线版「恢复渠道二」
-```
-
-⛔ 密码只经 stdin 传入（不进 shell 历史与 `ps`），且任何路径都不打印口令/密钥。
-
-**⑦ 落地顺序（分块交付，每块独立可验收）**
-
-> 进度（2026-10-03）：**B1–B8 ✅ 已落地**；**S1–S4 ✅ 已落地**（S1 原语+单测、S2 服务/端点/限流/失败计数、S3 前端、S4 文档登记）；**S5–S7 ✅ 已落地**（极验后端）；**S8 ✅ 已落地**（极验前端）。⏳ 全部**待 Owner 跑 `npm test` 验收**（B 系列既有 111 例 + S 系列新增用例）、`vue-tsc` 与真机验证。
-> ⚠️ 端点可用性：本节 13 个端点**全部可用**（重启 vantage-core 后生效）。
-
-| 块 | 内容 | 验收口径 | 状态 |
-|---|---|---|---|
-| B1 | `utils/totp.js` + `crypto.js` 增 `totpSecretAad` / `hashRecoveryCode` / `verifyRecoveryCode` | 纯离线单测：RFC 6238 向量、Base32 往返、恢复码归一化 | ✅ 已落地（`test/totp.test.js`） |
-| B2 | `repositories/user.repo.js`（users + user_recovery_codes）+ `scripts/create-user.js` | PGlite 真 SQL 用例（跑 0001–0008 迁移）；能建出首个 `admin` | ✅ 已落地（`test/user.repo.test.js`） |
-| B3 | `services/session.service.js` + `middleware/authPanel.js` + 错误码 + `totp:used` 键 | 会话生命周期：滑动/绝对超时、并发上限踢最旧、轮换、CSRF | ✅ 已落地（`test/session.test.js`；⚠️ 所有 preHandler 必须 `async`，否则 Fastify 按回调式处理会让请求永久挂起） |
-| B4 | `routes/auth.js`：`login` / `me` / `logout` / `logout-all` + 登录限流 + Cookie + 审计 | 桩 PG/Redis + `app.inject()`；**此时前端 `/login` 首次可联通** | ✅ 已落地（`test/auth.test.js`；含最小 `services/settings.service.js` 读取 `security.require_2fa`） |
-| B5 | `POST /auth/password` | 改密后旧 sid 立即失效、其它会话被踢、写审计 | ✅ 已落地（同上） |
-| B6 | `2fa/setup`（含 `qrcode` 依赖）/ `2fa/enable` / `2fa/disable` | 真机扫码绑定一次（人工，见下「需要人工验证什么」） | ✅ 已落地（`test/auth.2fa.test.js`） |
-| B7 | `2fa/recovery/regenerate` / `recovery/verify` + `2fa/verify` + `require_2fa` 受限态补全 + 防重放 | §6.2 的用例 12–14（10/11 已随 B4/B5 覆盖） | ✅ 已落地（同上） |
-| B8 | 文档回填：本节去掉 ⏳、§4.1 表状态列改 ✅、补「需要人工验证什么」清单 | 文档与代码口径一致 | ✅ 已落地（本轮随 B6/B7 完成） |
-| S1 | `utils/slider.js`（出题 / 容差 / 轨迹判定纯函数）+ `test/slider.test.js` | 容差边界、轨迹各规则正反例、200 次出题随机性、**响应字符串不含答案** | ✅ 已落地（`test/slider.test.js`） |
-| S2 | `services/captcha.service.js` + 2 个端点 + 独立限流桶（`utils/redisCounter.js` 复用固定窗口 Lua）+ 两个失败计数器 + 错误码 + 键登记 + 设置项/`getSettingInt` | `docs/slider-captcha-selfbuilt.md` §10.3 的 AC-1…AC-13 | ✅ 已落地（`test/auth.captcha.test.js`） |
-| S3 | `SliderCaptcha.vue` + `Login.vue` 集成 + `store/auth.ts`/`api/private.ts` + i18n | 「首次不出现 / 出错就地出现 / 拖对自动重提」三条人工验证 + `vue-tsc` 通过 | 🔶 已落地（前端，⏳ 待联调与编译验证） |
-| S4 | 文档回填（本节、`database.md` §5.4/§7、`frontend.md` §4.2） | 文档与代码口径一致 | ✅ 已落地（后端部分；`frontend.md` 的公开域口径待一并更正） |
-| S5–S7 | 极验 v4 后端（纯函数 + provider 抽象 + 端点/配置/熔断） | `docs/geetest-captcha.md` §10.1/§10.2（AC-G1…AC-G12） | ✅ 已落地（`test/geetest.test.js`、`test/auth.captcha.geetest.test.js`；落地记录见该文 §16） |
-| S8 | 极验 v4 前端（`GeetestCaptcha.vue` + `utils/geetest.ts` + `Login.vue` 按 `provider` 选组件 + i18n） | 「首次不出现 / 密码错后就地出现官方按钮 / 通过后自动重提 / `CAPTCHA_PROVIDER=selfbuilt` 时回落滑块」+ `vue-tsc` 通过 | ✅ 已落地（前端；⏳ 待 `vue-tsc` 与真机联调，落地记录见 `docs/geetest-captcha.md` §16.7） |
-
-**需要人工验证什么（Owner 清单，B6/B7 验收口径）**
-
-1. `cd server && npm test` —— 新增 `test/auth.2fa.test.js`（26 例）应全绿，既有 85 例不回归。
-2. 重启 vantage-core 后，真机走一次绑定：`设置 → 绑定 2FA`（或先用 curl 打 `2fa/setup`）→ 用认证器（Google Authenticator / 1Password 等）**扫码** → 输入 6 位码 `enable` → 确认认证器里显示「Vantage:<用户名>」。
-3. 登出再登录：应出现第二步验证；输入认证器实时码应通过；**30s 内重复使用同一码应被拒**（防重放）。
-4. 用一个恢复码登入 → 确认「剩余 9 个」提示；再把剩余数量打到 ≤2 验证前端强提示。
-5. `security.require_2fa=true` 下用一个未绑定账号登录 → 应被引导到绑定页并完成强制绑定。
-6. （可选）`node scripts/create-user.js --reset-2fa <username>` 走一遍离线救援，确认被锁用户可重新登录。
-
-> 未列入 **B 系列**的（⛔ 当时不在范围）：用户管理 CRUD（§4.9）、`PATCH /api/v1/settings`（§4.10）、OIDC 流程、WS 鉴权、前端任何改动。
-> ⚠️ **S 系列例外**：登录人机验证**包含前端改动**（`web/src/components/SliderCaptcha.vue` + 登录页集成），这是它的必要组成部分。
-
-**⑧ 待 Owner 拍板（D1–D6 已按建议实现，待追认；D7 为实现期安全收敛，待追认）**
-
-| # | 议题 | 建议 | 状态 |
-|---|---|---|---|
-| D1 | `2fa/enable` 是否顺带生成并返回 10 个恢复码（§4.1 原表未写，但 `docs/frontend.md` §4.6 要求「绑定成功即展示 10 个码」） | 是：`enable` 返回 `{ recovery_codes, remaining_recovery_codes }`，并同步补 §4.1 表 | ✅ 已按建议实现（§4.1 表已同步） |
-| D2 | 受限态下 `GET /auth/me` 的返回码（原文写「放行」） | 403 `totp_setup_required`（前端已按此实现，见本节 ②） | ✅ 已按建议实现 |
-| D3 | `security.require_2fa=true` 时是否禁止自助解绑 2FA | 禁止，返回 409 `conflict` | ✅ 已按建议实现 |
-| D4 | 改密策略 | 长度 8–128（Schema 卡边界）+ 不得与旧密码相同（400 `invalid_request`）+ 必须在 `full` 态 | ✅ 已按建议实现 |
-| D5 | `2fa/disable` 是否同时作废全部恢复码 | 是（避免留下悬空凭据） | ✅ 已按建议实现（事务内解绑+清码） |
-| D6 | 审计 `action` 命名 | `auth.login` / `auth.logout` / `auth.logout_all` / `auth.password_change` / `auth.2fa_verify` / `user.2fa_setup`·`enable`·`disable` / `user.recovery_regenerate`·`used` | ✅ 已全部启用（失败路径另加 `*_failed` 变体，见 ⑨） |
-| D7 | 矩阵②把 `2fa/setup` 列入 `totp_pending` 放行（原文）——字面实现允许"只持密码者换绑验证器再自验"，构成 **2FA 绕过** | 收敛为：已绑定账号（含 `totp_pending` 态）调用 setup → 409 `conflict` 且不动库；丢设备自救走恢复码（渠道一）或管理员重置（渠道二） | 🔶 已按安全收敛实现，**待 Owner 追认**（若坚持原文放行，需先给出防绕过的替代约束） |
-
-**⑨ 已实现行为细则（B4–B7，与代码逐条对应）**
-
-**登录 / 会话 / 改密（B4/B5）**
-
-- **登录限流**：成功与失败**都计数**（只数失败会让攻击者用正确密码"洗白"计数）；Redis 不可用时拒绝服务（503），⛔ 不做无限流登录。
-- **等时校验**：账号不存在（或 SSO-only 无本地密码）时也对固定假哈希跑一次完整 Argon2——"账号不存在"与"密码错"的**响应体和耗时都不可区分**。
-- **失败审计**：`auth.login_failed` 的 `detail.reason` 恒为 `invalid_credentials`（审计可被 `user` 角色读取，⛔ 不在里面写"账号是否存在"的答案）；`target` 记尝试的用户名。
-- **改密顺序**：验旧密码 → 写新哈希 → 轮换 sid → 踢其它会话（保留当前）→ 审计。
-- **审计 action**：`auth.login` / `auth.login_failed` / `auth.logout` / `auth.logout_all` / `auth.password_change` / `auth.password_change_failed`。
-- **`require_2fa` 的读取**：`settings` 表 + `settings:cache` 缓存（TTL 30s），变更需主动失效缓存（✅ R16）。
-
-**2FA（B6/B7）**
-
-- **setup 的绑定守卫（✅ D7 收敛）**：`totp_enabled=true` 时 setup 一律 409 `conflict` 且**不动库**（矩阵原把 setup 列入 `totp_pending` 放行，字面实现=用密码绕过 2FA，见 ⑧ D7）。
-- **防重放**：`verifyTotp()` 命中的**步号**必须先经 Redis `SADD totp:used:<uid>`（TTL 90s）原子认领，返回 0 即重放 → 400 `invalid_totp` + 审计 `reason='replayed_step'`（与 `invalid_totp` 区分：这是"有人重复使用验证码"的安全信号）。`enable` 与 `2fa/verify` 共用该守卫；90s 恰好覆盖 ±1 步的可验证窗口。
-- **状态门槛**：见 §4.1.0 的三态矩阵；限流中间件挂在会话校验**之前**（无会话狂刷 verify 同样计数）。
-- **enable 成功 = 已过第二步**：验证码即持有证明，会话直接补丁为 `full` 并**轮换 sid**；恢复码在 enable 时生成并整批写入（D1）。
-- **disable 的顺序**：验密码（统一 401）→ 未绑定 409 → `require_2fa` 策略 409（D3）→ 事务内解绑+清恢复码（D5，`resetTotp` 两条语句）。**不轮换 sid、不动当前会话**。
-- **第二步不写 `touchLogin`**：`users.last_login_method` 的 CHECK 只允许 `password/totp/oidc`（迁移 0002），且第一步已记录本次登录的时间与 IP——不为此发明新枚举值。
-- **恢复码校验的容错口径**：归一化（大写、去连字符/空白、`I/L→1`、`O→0`）在**哈希口径之内**，`a1b2c-d3e4f` 与 `A1B2CD3E4F` 命中同一条记录；消耗是单条 `UPDATE … WHERE used_at IS NULL`；错误码统一 400 `invalid_totp`。
-- **审计 action**：成功 `user.2fa_setup` / `user.2fa_enable` / `user.2fa_disable` / `user.recovery_regenerate` / `user.recovery_used` / `auth.2fa_verify`；失败对应 `*_failed`（`detail.reason`：`invalid_totp` / `replayed_step` / `invalid_code` / `invalid_credentials` / `require_2fa_policy`）。⛔ detail 里没有验证码、恢复码明文、secret（有测试钉住）。
+> **§4.1.1「实现规范与落地状态」已迁出** → `docs/api-status.md` §3（会话模型、三态矩阵与端点可达性、Redis 键、TOTP / 恢复码、离线救援 CLI、分块落地表、行为细则）。原 §4.1.1 ⑧ 的「待 Owner 拍板 D1–D7」已于 2026-10-04 **全部追认**，逐条见该文件 §4.1。
+> ⚠️ 旧文里与本契约冲突的两处表述（`me` 被列为 `setup_required` 的"放行"端点、"其余接口一律 403"）**已作废**，以上面 §4.1.0 的表为准。
 
 ### 4.2 主机（需登录，含 IP 与历史）
 
-> 全部 ⏳ 未实现（M2）。⚠️ 本节的响应字段清单以设计文档已明确者为限，未列出的细节（如详情页 `host_info` 的完整字段集）**待实现时按 `docs/database.md` 定稿**，⛔ 不要凭本节猜测。
+> ✅ **`GET /api/v1/hosts`、`/api/v1/summary`、`/hosts/{id}`、`/probes`、`/ip-history`、`/processes` 均已落地（2026-10-04）**；仍 ⏳ 的是 `/hosts/{id}/metrics`（时序查询，参数待定稿 → §4.3）。
+> 实现口径（在线判定同源、`null` 不补 0、脱敏白名单、排序）逐条见 `docs/server-status-api.md` 与 `docs/api-status.md` §4.6。
 
 #### `GET /api/v1/hosts` — 主机列表
 
-**查询参数**
+**鉴权**：`loadPanelSession` → `requireFullSession` → `requireCsrf`（GET 不校验 CSRF，挂上以与 `/auth/*` 同构）。
+**三态**：`setup_required` → 403 `totp_setup_required`；`totp_pending` → 403 `totp_required`（复用既有中间件，⛔ 不另写判定）。
+**限流**：本期**不加**专用桶 —— 已登录 + 登录桶已覆盖；⚠️ 若将来要对齐公开接口，可加 `ratelimit:panel:<user_id>`。
+
+**查询参数**（✅ 2026-10-04 定：`status` / `tag` / `q` 落地；`cursor` 本期不实现）
 
 | 参数 | 必需 | 说明 |
 |---|---|---|
-| `status` | ➕ | `online` / `offline` / `disabled` |
-| `tag` | ➕ | 按标签过滤 |
-| `q` | ➕ | 名称模糊搜索 |
-| `limit` / `cursor` | ➕ | 见 §1.2 ③（默认 20 / 上限 200，keyset 游标） |
+| `status` | 否 | `online` / `offline` / `disabled`。⚠️ 过滤的是**推导后**的状态（⛔ 不是过滤 `agents.status` 列 —— 否则 `?status=online` 会把"库说 online 但其实已失联"的机器一起返回）；非法取值 → 400 `schema_invalid` |
+| `tag` | 否 | 标签精确匹配（`tags @> to_jsonb($x)`，走 `agents_tags_gin_idx`）；长度 1–64 |
+| `q` | 否 | 名称模糊搜索（对 `name` / `display_name` 做 `ILIKE`）；长度 1–64。⚠️ 服务端对 `%` `_` `\` 做**转义**后再拼（按字面匹配），⛔ 前端不要自己转义（否则会双重转义）。⛔ 空串 `?q=` 按"未提供"处理（= 不过滤），不是 400、也不是空结果 |
+| `limit` | 否 | 默认 20 / 上限 200（§1.2 ③）；非正整数 → 400 `schema_invalid`；**超过上限夹取到 200 并告警**（⛔ 不因为"要得太多"而拒绝整个请求） |
+| `cursor` | 否 | ⛔ **本期不实现**（状态类接口没有 keyset 的自然键，排序键是派生值）。传了**被忽略**（⛔ 不返回 400 —— 前端骨架已带该参数） |
+| 其它 | — | 未知参数**忽略**（前端可能带 `_t` 之类的缓存击穿参数） |
 
-**返回 200**：数组（+ 分页时的 `next_cursor`），每项字段：
+**返回 200**：`{ items: [...], next_cursor: null, updated_at }`（§1.2 ③；⚠️ `next_cursor` 本期**恒为 null** —— ⛔ 不返回假游标，那会让前端以为要翻页）。每项字段 = **公开字段的超集**：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `id` | string(uuid) | 内部 ID（⛔ 仅私有接口可见） |
-| `name` | string | 主机名 |
-| `display_name` | string \| null | 显示名 |
+| `slug` | string | 公开标识（便于与公开页对照） |
+| `name` | string | 显示名优先 `display_name`，其次 `name`（与公开侧同一口径） |
+| `display_name` | string \| null | 显示名原始列（面板可同时展示两者） |
 | `tags` | string[] | 标签 |
-| `status` | string | `online` / `offline` / `disabled` |
-| `os` / `arch` | string \| null | 系统 / 架构 |
-| `last_seen_at` | string(RFC3339) | 最近上报时间（**精确值**；公开接口才做相对化处理） |
-| `last_ip` / `reported_ip` | string \| null | 上报来源 IP / Agent 自测出口 IP（双源比对，✅ §8） |
-| `clock_drift_ms` | number \| null | 时钟漂移（决策 #16/#17） |
+| `status` | string | `online` / `offline` / `disabled`（三态齐全；推导规则同公开侧） |
+| `os` / `arch` | string \| null | 系统 / 架构（缺失为 `null`；⚠️ 公开侧是"字段缺省"） |
+| `uptime` | number \| null | 运行时长（秒） |
+| `last_seen_ago` | string \| null | 相对化文案（与公开侧同一函数，⛔ 两边不得出现不同措辞） |
+| `last_seen_at` | string(RFC3339) \| null | 最近上报时间（**精确值**；公开接口才做分钟级取整） |
+| `last_ip` / `reported_ip` | string \| null | 上报来源 IP / Agent 自测出口 IP（双源比对，✅ §8）；⚠️ `INET` 列经 `host()` 转文本（IPv6 会剥离 `/掩码`） |
+| `clock_drift_ms` | number \| null | 时钟漂移（决策 #16/#17）；符号口径 **负值 = Agent 慢** |
 | `ip_flapping` | boolean | 是否处于 IP 抖动（决策 #39） |
-| `active_alerts` | number | 当前未恢复告警数 |
-| `snapshot` | object | 当前快照（结构同 §3.3 的 `snapshot`） |
+| `flapping_since` | string(RFC3339) \| null | 进入抖动的时间（面板显示"持续多久"） |
+| `active_alerts` | number | 当前 `firing` 事件数。⚠️ **本期恒为 0**（告警引擎在 M3），查询用 `LEFT JOIN + COALESCE`，⛔ 不能是 `INNER JOIN`（否则无告警的主机会整体消失） |
+| `probes` | object | `{ up, down }`（最近一轮，同公开侧） |
+| `snapshot` | object | 当前快照（结构同 §3.2 的 `snapshot`，⛔ 两边必须是同一个结构，同一张表格组件复用） |
 
-**错误**：401 `session_expired`（未登录）
+**错误**：401 `session_expired`（未登录）｜403 `totp_required` / `totp_setup_required`（受限态）｜400 `schema_invalid`（`status` 非法、`limit` 非正整数、`q` 超长/重复参数）
+
+#### `GET /api/v1/summary` — 面板汇总计数（➕ 2026-10-04 新增）
+
+**鉴权**：同 `/hosts`（`requireFullSession`）。**限流**：本期不加专用桶。**缓存**：⛔ **不做响应缓存**（私有响应的可见性绑在会话上）。
+
+**200**：与 `GET /api/public/summary`（§3.2）**完全同形**：`{ total, online, offline, disabled, alerts: {critical,warn,info}, updated_at }`。前端可共用同一个类型。
+
+> 🔑 为什么必须单独有这个端点：列表页顶栏要显示「在线 X / 离线 Y / 告警 Z」，而用 `GET /api/v1/hosts` 的返回**自己数**是错的 ——
+> `limit` 一旦截断（默认 20），数出来的只是"这一页里有几台"。两者共用服务端同一个计数实现，故数字不可能不一致。
 
 #### `GET /api/v1/hosts/{id}` — 主机详情
 
-**路径参数**：`id`（内部 UUID）。
-**返回 200**：主机信息 + `host_info` + `capabilities` + 当前快照 + 探活当前状态（各子对象的完整字段集待实现时定稿，见本节开头提醒）。
+**路径参数**：`id`（内部 UUID；形状非法 → 400 `schema_invalid`，⛔ 不让它撞到 SQL 的 `22P02`）。不存在 → 404。
+
+**200**：= 列表条目（§4.2 上一张表的**全部字段**，前端同一张表格组件两边复用）+ 纵深字段：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `host_info` | object \| null | 最近一次的原始 `host` 快照（`hostname`/`os`/`kernel`/`arch`/`boot_time`/`capabilities`）。⚠️ 私有域**允许**给（排障要用）；公开侧⛔ 只给 `os` 与 `uptime` |
+| `capabilities` | object \| null | 能力声明快照（决定面板展示哪些图表） |
+| `current_metrics` | object | **全部序列当前值**：键 = 指标**全名**（含维度，如 `disk.used_pct{mount=/data}`），值 = number \| null。⚠️ 与五槽位 `snapshot` 并存：`snapshot` 给卡片/汇总用，`current_metrics` 给"每核 / 各分区 / 各网卡"的纵深块用 |
+| `updated_at` | string | 快照生成时刻（DB 时钟） |
+
+⚠️ `current_metrics` 只含**观测窗口**（5 分钟）内有过写入的序列 —— 窗口外的旧序列不返回（⛔ 不把 5 天前的读数当"当前值"）。
+
+#### `GET /api/v1/hosts/{id}/probes` — 探活历史
+
+**查询参数**
+
+| 参数 | 说明 |
+|---|---|
+| `from` / `to` | RFC3339（含时区）或 unix 毫秒/秒；默认 = **最近 24 小时**；最大跨度 **30 天** → 超出 400 `range_too_large`；⛔ 不带时区的裸时间串 → 400（猜错时区 = 8 小时数据错位） |
+| `name` | 只取某个 probe（≤128） |
+| `type` | `ping` / `http` / `https` / `tcp` / `dns`；非法值 → 400 `schema_invalid` |
+
+**200**：`{ host_id, from, to, truncated, items: [...], updated_at }`，每个 probe 一项：
+
+| 字段 | 说明 |
+|---|---|
+| `name` / `type` / `target` | 该 probe 的身份（⚠️ **私有域给完整 target**，公开侧才脱敏） |
+| `availability` | `{ total, up, down, ratio, window_from, window_to }`。⚠️ `total/up/down` 是**整个窗口**的统计，**不受返回点数截断影响**；窗口内无探活时 `ratio: null`（⛔ 不是 1） |
+| `latest` | 最近一次结果 `{ checked_at, up, latency_ms, status_code, error }`（窗口内没有 → `null`） |
+| `results` | 时间条数据，**按时间倒序**，每项同 `latest` 的形状 |
+| `truncated` | 该 probe 的点数被上限截断（每 probe 最多 500 点，取**最近**的） |
+
+**错误**：401 `session_expired`｜403 受限态｜404 `not_found`｜400 `schema_invalid` / `range_too_large`
+
+#### `GET /api/v1/hosts/{id}/ip-history` — IP 变更时间线
+
+**查询参数**：`limit`（默认 100、上限 500，**两个列表各自适用**；超限夹取）。
+
+**200**：`{ host_id, current_ip, reported_ip, ip_flapping, flapping_since, intervals: [...], events: [...], updated_at }`
+
+| 字段 | 说明 |
+|---|---|
+| `current_ip` / `reported_ip` | 取自 `agents` 行（与列表同源），⛔ 不从区间表反推 |
+| `intervals[]` | IP **出现区间**：`{ ip, source, first_seen, last_seen }`；⚠️ 同一地址不同 `source`（`remote` / `agent_reported`）是**两行**——那是"双源比对"的基础数据 |
+| `events[]` | 变化/Flapping **事件**：`{ old_ip, new_ip, same_subnet, changed_at, source, kind, change_count, subnet_prev, subnet_next }`，按时间倒序；`kind='flapping'` 表示"进入抖动"这一事件本身 |
+
+⚠️ 两个列表语义不同（区间是聚合的、事件是逐次的），⛔ 前端不要把两者按行对齐。
+
+#### `GET /api/v1/hosts/{id}/processes` — 进程 Top 快照
+
+**查询参数**：`at`（RFC3339 或 unix 毫秒；省略 = 最近一条）。⚠️ 语义是「该时刻**之前**最近的一条」——采样是周期性的，要求时间戳严格相等等于永远查不到；`at` 在未来 → 400 `schema_invalid`（否则会被误读成"数据缺失"）。
+
+**200**：`{ host_id, at, total, top, updated_at }`。
+⚠️ **没有采集到**（超出 30 天保留期 / 从未上报进程）时 `at` / `total` / `top` **同时为 `null`** —— 与"那一刻确实没有进程"（`total: 0, top: []`）必须能区分。
 
 #### `GET /api/v1/hosts/{id}/metrics` — 时序查询
 
 见 **§4.3**（该节有完整的查询参数、档位约束与响应格式）。
 
-#### `GET /api/v1/hosts/{id}/probes` — 探活历史
+> ⚠️ **已作废的旧草案**：本节原先还给 `/{id}/probes`、`/{id}/ip-history`、`/{id}/processes`
+> 写过一版形状（`{probes, current}` / `{ranges, events}` / `{ts, total, top}`）。那三版**已在 2026-10-04 落地时被上面的契约取代**
+> （分组 + 可用率、区间/事件双列表 + 当前 IP、`at`/`total`/`top` 三态可空）。⛔ 不要再沿用旧字段名。
 
-**查询参数**：`from` / `to`（时间范围）、`name`（探活名）、`type`（`ping` / `http` / `https` / `tcp`）。
-
-**返回 200**
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `probes`（或数组本体） | array | 每项 `{ probe_name, probe_type, target, up, latency_ms, status_code, error, checked_at }` |
-| 当前状态摘要 | object | 每个 probe 的当前 up/down 摘要（与历史同响应返回） |
-
-#### `GET /api/v1/hosts/{id}/ip-history` — IP 变更历史
-
-**查询参数**：`from` / `to`。
-
-**返回 200**
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `ranges` | array | 每项 `{ ip, source, first_seen, last_seen }` |
-| `events` | array | 每项 `{ old_ip, new_ip, same_subnet, source, kind, change_count, changed_at }` |
-
-> ✅ §8：该接口支撑「当前 IP + 变更时间线」的展示；`source` 区分 `agent_reported` / `center_observed` 等来源。
-
-#### `GET /api/v1/hosts/{id}/processes` — 进程 Top 快照
-
-**查询参数**：`at`（unix 毫秒或 RFC3339；省略取**最近一条**）。
-
-**返回 200**
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `ts` | number | 该快照的时间戳 |
-| `total` | number | 进程总数 |
-| `top` | array | 每项 `{ pid, name, cpu, mem }`（明细来自 `process_snapshots`，⛔ 不进时序库） |
-
-### 4.3 时序查询 `GET /api/v1/hosts/{id}/metrics`（✅ §10.2，参数为 ➕ 建议）
+### 4.3 时序查询 `GET /api/v1/hosts/{id}/metrics`（✅ §10.2；标 ❓ 的参数仍待拍板，索引见 `docs/api-status.md` §5.2）
 
 **查询参数**
 
@@ -1130,12 +1096,12 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 |---|---|---|
 | `metrics` | ✅ | 逗号分隔，元素可为**基名**或**全名**：`cpu.usage,mem.used_pct,disk.used_pct`（基名 = 该基名下**全部维度序列**，如所有挂载点）或 `disk.used_pct{mount=/data}`（全名 = 单一序列）。✅ 命名与转义规范见 `docs/database.md` §5.7.2（**已定：维度写进指标名**） |
 | `from` / `to` | ✅ | 时间范围 |
-| `step` | ➕ | `auto`（默认）/ `15s` / `1m` / `5m`；不允许其它值（防止对原始层做任意聚合） |
-| `agg` | ➕ | `avg`（默认）/ `max` / `min`（仅降采样层支持 `min/max`） |
+| `step` | ❓ | `auto`（默认）/ `15s` / `1m` / `5m`；不允许其它值（防止对原始层做任意聚合） |
+| `agg` | ❓ | `avg`（默认）/ `max` / `min`（仅降采样层支持 `min/max`） |
 
-➕ 基名展开的实现口径：`metric = :base` **或** 前缀命中，建议用**区间比较**而非 LIKE——`metric >= base || '{' AND metric < base || '}'`（避免 `%`/`_` 通配符转义问题；基名本身不含这两个字符）。
+❓ 提案（基名展开的实现口径）：`metric = :base` **或**前缀命中，建议用**区间比较**而非 LIKE——`metric >= base || '{' AND metric < base || '}'`（避免 `%`/`_` 通配符转义问题；基名本身不含这两个字符）。
 
-**档位与范围约束（➕ 建议，须在实现中硬校验）**
+**档位与范围约束（❓ 提案，须在实现中硬校验）**
 
 | step | 数据源 | 允许的最大范围 | 说明 |
 |---|---|---|---|
@@ -1144,9 +1110,9 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 | `5m` | `metrics_5m` | ≤ 1 年 | 长周期图表只查降采样层（✅ 设计 §9） |
 
 `step=auto` 时由服务端按范围选档并在响应中回传**实际** step；超过最大范围 → 400 `range_too_large`（推荐前端先请求 `5m`）。
-➕ 建议：单请求**展开后** series 数 ≤ 20、单 series 点数 ≤ 2000，超限返回 400（防图表卡死与 DB 压力）；基名展开过多时前端应先收窄维度。
+❓ 提案：单请求**展开后** series 数 ≤ 20、单 series 点数 ≤ 2000，超限返回 400（防图表卡死与 DB 压力）；基名展开过多时前端应先收窄维度。
 
-**响应（➕ 建议格式，适配 ECharts）**
+**响应（❓ 提案格式，适配 ECharts）**
 
 ```json
 {
@@ -1167,20 +1133,22 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 
 ### 4.4 Agent 与凭证管理（需登录，✅ 全部仅 `admin`）
 
-> 全部 ⏳ 未实现（M3）。⛔ 本节任何响应都**不得**出现 `agent_key_hash` / `agent_secret_hash` / `agent_secret_enc`；明文凭证**只在创建与轮换的响应里出现一次**。
+> ✅ **`POST /api/v1/agents` 已落地（2026-10-04）**；列表 / 详情 / `PATCH` / `rotate` / `disable` / `enable` / `revoke` / `rotate-reminder/test` 仍 ⏳ M3（列表字段与"吊销语义"两处待定稿，见 `docs/api-status.md` §4.7）。
+> ⛔ 本节任何响应都**不得**出现 `agent_key_hash` / `agent_secret_hash` / `agent_secret_enc`；明文凭证**只在创建与轮换的响应里出现一次**。
+> **通用约定**：全部端点需 `requireFullSession`（受限态 → 403 `totp_required` / `totp_setup_required`）+ `requireRole('admin')`（非 admin → 403 `role_denied`）+ 写请求 CSRF；审计动作 `agent.*`。
 
 #### `GET /api/v1/agents` — Agent 列表
 
-**查询参数**：无（➕ 可按 `status` 过滤，待实现时定）。
+**查询参数**：无（❓ 可按 `status` 过滤，待实现时定）。
 
-**返回 200**：数组，每项字段：
+**返回 200**：`{ items: [...], rotate_policy }`（§1.2 ③），每项字段：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `status` | string | `active` / `disabled` / `revoked` |
 | `rotated_at` | string(RFC3339) \| null | 最近一次凭证轮换时间 |
 | `credential_age_days` | number | `now() - COALESCE(rotated_at, created_at)` 的天数 |
-| `rotate_recommended` | boolean | 是否超阈（✅ 本轮决策：列表徽标） |
+| `rotate_recommended` | boolean | 是否超阈（✅ 已定：列表徽标） |
 | `last_seen_at` | string(RFC3339) \| null | 最近上报时间 |
 | `last_ip` | string \| null | 最近上报 IP |
 
@@ -1190,27 +1158,50 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 |---|---|---|
 | `rotate_policy` | object | `{ days, notify }`，由 `settings` 的 `credential_rotate.*` 派生；⛔ 前端不硬编码阈值 |
 
-#### `POST /api/v1/agents` — 创建 Agent
+#### `POST /api/v1/agents` — 创建 Agent（✅ 已落地 2026-10-04）
+
+**权限**：`requireFullSession` + `requireRole('admin')` + CSRF。**审计**：`agent.create`（target = `name`，detail 只含 `agent_id`/`public_slug`/`tags`，⛔ 不含凭证）。
 
 **请求体**
 
 | 字段 | 类型 | 必需 | 说明 |
 |---|---|---|---|
-| `name` | string | ✅ | **唯一**；重名 → 409 `already_exists` |
-| `display_name` | string | ➕ | 显示名 |
-| `tags` | string[] | ➕ | 标签 |
+| `name` | string | ✅ | **唯一**；1–128 字符（trim 后非空、⛔ 不允许控制字符）；重名 → 409 `already_exists`（`details.field='name'`） |
+| `display_name` | string | 可选 | ≤128；空串按"未提供"处理（→ `null`） |
+| `tags` | string[] | 可选 | ≤32 个，每项 1–32 字符；⛔ 重复项 → 400（重复标签会让"按标签筛选"失去意义） |
 
 **成功 201**
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `id` | string(uuid) | 内部 ID |
+| `id` | string(uuid) | 内部 ID（Agent 上报时用作 `X-Agent-Id` 与 body 的 `agent_id`） |
+| `name` / `display_name` / `tags` | — | 回显（面板可直接渲染结果行，无需再查列表） |
 | `public_slug` | string | 公开标识（与内部 UUID 无关，见 §3.1） |
-| `agent_key` | string | `vk_` 前缀；⛔ **仅此一次**返回，之后永不可再取（✅ §6.1） |
-| `agent_secret` | string | `vs_` 前缀；⛔ 同样仅此一次 |
-| `install_hint` | string | 带 key 的一键安装命令（`VANTAGE_KEY` env 内联）+ 交互式 / `--key-file` 两种替代形式（✅ 决策 #37 修订，见下文） |
+| `status` | string | ⚠️ **连接状态**，新 Agent 恒为 `offline`（⛔ 不是"凭证已启用"那种口径） |
+| `created_at` | string(RFC3339) | |
+| `agent_key` | string | `vk_` 前缀；**身份**用（上报时放 `X-Agent-Key`）；⛔ **仅此一次**返回 |
+| `agent_secret` | string | `vs_` 前缀；**签名**用（算 HMAC，⛔ 不上行）；⛔ **仅此一次**返回 |
+| `install_hint` | object | 一键安装提示，见下 |
 
-**错误**：400 `schema_invalid`｜409 `already_exists`（重名）｜403 `role_denied`（非 admin）
+**`install_hint` 的形状**（⚠️ 与本节初稿的 `string` **不同**，2026-10-04 改定：前端要分三段展示 + 一条风险提示）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `center_url` | string | `--center` 用的中心地址：优先 `PUBLIC_ORIGIN`，未配置时按当前请求推导（并在 `warnings` 里提醒去配置） |
+| `script_url` | string \| null | `AGENT_INSTALL_SCRIPT_URL`（`vantage.sh` 的下载地址） |
+| `one_liner` | string \| null | **形式①**：`VANTAGE_KEY=… VANTAGE_SECRET=… sh -c 'curl … \| sudo -E sh -s -- install --center … --agent-id …'`（⚠️ 含明文凭证、会进 shell history） |
+| `interactive` | string \| null | **形式②**：交互式 / stdin（最安全，⛔ 不含凭证） |
+| `key_file` | string \| null | **形式③**：`--key-file /etc/vantage/agent.key --secret-file /etc/vantage/agent.secret`（长期方案） |
+| `security_note` | string | 风险与善后（history / `/proc/$PID/environ` / 建议 `unset` + `history -d`）。⚠️ 面板**必须**展示 |
+| `warnings` | array | `[{ code, message }]`；目前两种：`install_script_not_configured`、`center_url_not_https` |
+
+⚠️ **未配置 `AGENT_INSTALL_SCRIPT_URL` 时**：`script_url` 与三个命令字段**全为 `null`**，并给出 `install_script_not_configured` 警告。
+⛔ **绝不返回带 `<mirror>` 占位符的假命令** —— 一条会 `curl` 到错误地址、还被 `sudo sh` 执行的命令，比"没有命令"危险得多。
+⚠️ 三种形式⛔ **永远不出现** `--key <明文>` / `--secret <明文>`（`ps` / `/proc/$PID/cmdline` 对同机低权用户可见，决策 #37 永久红线）。
+
+**错误**：400 `schema_invalid`（字段类型/长度/白名单/重复标签）｜401 `session_expired`｜403 `totp_required` / `totp_setup_required` / `role_denied` / `csrf_invalid`｜409 `already_exists`（重名）
+
+> ✅ **上线闭环**（`docs/agent.md` §12.3）：面板建 Agent（本端点）→ 复制一键命令到宿主机执行 → 首次上报成功（面板出现该机与首次 IP）→ 按需编辑 `config.yaml`（探活/采集/频率）→ 配置告警通道。
 
 #### `GET /api/v1/agents/{id}` — 元信息
 
@@ -1235,14 +1226,14 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 
 **请求体**：无。**语义**：不可恢复；`disabled_at` 落库，历史数据保留。
 
-**到期提醒（✅ 本轮决策：不自动轮换，只提醒）**
+**到期提醒（✅ 已定：不自动轮换，只提醒）**
 
 - 面板：列表/详情展示 `credential_age_days` + `rotate_recommended` 徽标（前端见 `docs/frontend.md`）。
-- 阈值**可配**（✅ 本轮决策）：`credential_rotate.reminder_days`（✅ 存 `settings` 表，面板可改、立即生效，默认 **90** 天），面板徽标与服务端通知共用同一阈值；`GET /api/v1/agents` 响应根级附带 `rotate_policy: { days, notify }`，由后端下发、⛔ 前端不硬编码。
+- 阈值**可配**（✅ 已定）：`credential_rotate.reminder_days`（✅ 存 `settings` 表，面板可改、立即生效，默认 **90** 天），面板徽标与服务端通知共用同一阈值；`GET /api/v1/agents` 响应根级附带 `rotate_policy: { days, notify }`，由后端下发、⛔ 前端不硬编码。
 - 通知：core **每日一次**扫描超阈 Agent → 复用 `channels` 通道提醒管理员（✅ 决策 #23），`rotate_reminder_at` 按日期去重、未处理则次日继续；⛔ 提醒内容不含任何凭证；⛔ 不存在「自动轮换」开关。
-- ➕ 可选：`POST /api/v1/agents/{id}/rotate-reminder/test`（手动触发一次提醒，便于验证通道是否配好）——❓ 是否需要待定。
+- ✅ 已定（2026-10-04）：新增 `POST /api/v1/agents/{id}/rotate-reminder/test`（手动触发一次提醒，便于在真到点之前确认通道配通）——与 `POST /channels/{id}/test` 同性质，纳入 M3 验收。
 
-> ✅ **决策 #37 修订（本轮 Owner 决定）**：设计 §12.3 要求「生成 key → 拼装成**安装命令**」，§12.2/决策 #37 又「禁用命令行传 key」。本轮裁定为——
+> ✅ **决策 #37 修订（✅ 已定）**：设计 §12.3 要求「生成 key → 拼装成**安装命令**」，§12.2/决策 #37 又「禁用命令行传 key」。裁定为——
 > 1. ✅ 面板**默认给出一条带 key 的一键命令**，使用 **`VANTAGE_KEY=<key>` 环境变量内联**形式（并同时给出交互式/stdin 与 `--key-file` 两种更安全形式，供用户二选一）；
 > 2. ✅ 面板**同时单独展示一次** `agent_key` / `agent_secret` 明文（便于手工写入受限文件）；
 > 3. ⛔ **仍然禁止 `--key <明文>` 参数形式**（`ps` / `/proc/$PID/cmdline` 对同机低权用户可见）；
@@ -1257,7 +1248,7 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 | GET | `/api/v1/alert-rules` | 列表（`?enabled=&kind=`） |
 | POST | `/api/v1/alert-rules` | 创建，见下 |
 | GET/PATCH/DELETE | `/api/v1/alert-rules/{id}` | 读/改/删 |
-| POST | `/api/v1/alert-rules/{id}/dry-run` | ➕ 建议：对最近历史数据试算，返回「若启用会触发几次」（不发送通知） |
+| POST | `/api/v1/alert-rules/{id}/dry-run` | ❓ 待拍板：对最近历史数据试算，返回「若启用会触发几次」（不发送通知） |
 
 **请求体字段（✅ §7.1）**
 
@@ -1298,17 +1289,17 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 | `from` / `to` | 时间范围 |
 | `limit` / `cursor` | 见 §1.2 ③ |
 
-**返回 200**：数组（+ 分页时的 `next_cursor`），每项：
+**返回 200**：`{ items: [...], next_cursor }`（§1.2 ③），每项：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `metric` | string | **触发序列全名**（✅ 本轮决策：同一规则在不同挂载点/网卡上各自成条） |
+| `metric` | string | **触发序列全名**（✅ 已定：同一规则在不同挂载点/网卡上各自成条） |
 | `value` | number | 触发时的值 |
 | `started_at` | string(RFC3339) | 触发时间 |
 | `resolved_at` | string(RFC3339) \| null | 恢复时间 |
 | `notified_at` | string(RFC3339) \| null | 最近一次通知时间 |
 
-> ✅ 已定（本轮）：**不引入事件 `ack`（认领）语义**——"别再报"用静默窗口/维护期（§4.7）与规则 `cooldown` 覆盖；⛔ 不加 ack 字段与按钮。
+> ✅ 已定：**不引入事件 `ack`（认领）语义**——"别再报"用静默窗口/维护期（§4.7）与规则 `cooldown` 覆盖；⛔ 不加 ack 字段与按钮。
 > 📌 前端可用 `labels` 把全名渲染成可读名（`docs/frontend.md`）。
 
 #### `GET /api/v1/alert-events/{id}` — 事件详情
@@ -1336,7 +1327,7 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 
 #### `GET /api/v1/notification-log` — 发送记录（排障）
 
-**查询参数**（➕ 建议）：`event_id` / `channel` / `ok` / `from` / `to`。
+**查询参数**（❓ 待拍板）：`event_id` / `channel` / `ok` / `from` / `to`。
 
 ### 4.7 静默窗口 / 维护期（✅ §7.1）
 
@@ -1350,9 +1341,9 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/v1/audit-logs` | `?from&to&actor=&actor_type=&action=&target=&limit&cursor` → `[{id, actor, actor_type, action, target, ip, detail, ts}]`（`detail` 已脱敏） |
+| GET | `/api/v1/audit-logs` | `?from&to&actor=&actor_type=&action=&target=&limit&cursor` → `{ items: [{id, actor, actor_type, action, target, ip, detail, ts}] }`（`detail` 已脱敏；查询参数集 ❓ 待拍板） |
 
-### 4.9 权限（RBAC，✅ 本轮决策：**暂时两级**）
+### 4.9 权限（RBAC，✅ 已定：**暂时两级**）
 
 | 角色 | 允许 |
 |---|---|
@@ -1362,7 +1353,7 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 - ✅ 决策：本期**只有这两级**（`users.role` 单值字段，见 `docs/database.md` §5.3）；原设计的「只读/运维/管理员」三级**暂不实现**——需要时再扩（届时权限判定改为角色集合判定，接口形态不变）。
 - ✅ 已定：`user`（普通用户）**纯只读**——所有写操作仅 `admin`；不需要为「降级只写告警配置」之类的中间态设计权限（`docs/database.md` §5.3）。
 - 越权 → 403 `role_denied` + 写审计；前端按 `role` 隐藏写按钮（`docs/frontend.md`）。
-**用户管理端点（➕ 建议，仅 `admin`；字段级契约待 M3 定稿）**
+**用户管理端点（❓ 待拍板：仅 `admin` 已定，字段级契约在 M3 定稿；决议索引 `docs/api-status.md` §5.2）**
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -1372,9 +1363,9 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 | POST | `/api/v1/users/{id}/password-reset` | 重置他人密码（⛔ 明文不回显） |
 | POST | `/api/v1/users/{id}/2fa/reset` | ✅ 已定（恢复渠道二）：清空目标用户 `totp_enabled=false`、`totp_secret_enc=NULL`，**作废其全部恢复码**，**强制踢下线该用户所有会话**，写审计（`action=user.2fa_reset`）；⛔ 不允许经该接口读取或导出任何 TOTP 密钥；前端须二次确认（输入用户名） |
 
-> ⚠️ 上表除 `2fa/reset` 外均为 ➕ 建议，请求/返回字段集在 M3 实现时定稿；⛔ 任何用户接口都不得返回 `password_hash` / `totp_secret_enc`。
+> ⚠️ 上表除 `2fa/reset` 外均为 ❓ 待拍板，请求/返回字段集在 M3 实现时定稿；⛔ 任何用户接口都不得返回 `password_hash` / `totp_secret_enc`。
 
-### 4.10 系统设置 `settings`（✅ 本轮决策：面板可改、立即生效）
+### 4.10 系统设置 `settings`（✅ 已定：面板可改、立即生效）
 
 > ⏳ 未实现（M3）。`user` 角色**可读**，仅 `admin` 可改。
 
@@ -1382,7 +1373,7 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 
 **请求参数**：无。
 
-**返回 200**：数组，每项：
+**返回 200**：`{ items: [...] }`（§1.2 ③），每项：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -1411,7 +1402,7 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 
 | key | 类型 | 默认 |
 |---|---|---|
-| `public_view.enabled` | bool | **true**（✅ 本轮决策） |
+| `public_view.enabled` | bool | **true**（✅ 已定） |
 | `security.require_2fa` | bool | false |
 | `credential_rotate.reminder_days` | int | 90 |
 | `credential_rotate.notify` | bool | true |
@@ -1420,7 +1411,7 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 
 - ✅ 每次变更写审计（`action=settings.update`，`detail` 含 key/旧值/新值，⛔ 不含密钥）。
 - ⛔ 该接口**不承载**通道密钥、TOTP 密钥等任何敏感值（分别在 `channels` / 用户 2FA 接口）。
-- ➕ 建议：变更后向在线 WS 广播 `delta{channel:"settings"}`，让已打开的面板即时刷新。
+- ❓ 待拍板：变更后向在线 WS 广播 `delta{channel:"settings"}`，让已打开的面板即时刷新。
 - 📌 `/api/v1/agents` 响应里的 `rotate_policy` 即由 `credential_rotate.*` 派生（`docs/frontend.md` §4.6）。
 
 ---
@@ -1438,7 +1429,7 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 - ✅ 反代需放行 `Upgrade` / `Connection: upgrade`，且读超时 > 保活间隔。
 - ✅ 限流：`ratelimit:ws:<ip>`。
 
-### 5.2 消息格式（➕ 建议的具体编码，语义 ✅ §18.2）
+### 5.2 消息格式（❓ 具体编码待拍板；语义 ✅ §18.2；决议索引 `docs/api-status.md` §5.2）
 
 **消息类型总表**（⛔ 客户端→服务端**只允许** `subscribe` 一种应用层消息）
 
@@ -1462,7 +1453,7 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 { "type": "subscribe", "channels": ["hosts","probes","alerts"], "agents": ["*"] }
 ```
 
-- ✅ 已定（本轮）：**应用层只接受 `subscribe`**（`agents: ["*"]` 或具体 id 数组；`channels` 缺省＝全部）。它只影响本连接收到哪些 delta，⛔ 不携带任何指令语义。
+- ✅ 已定：**应用层只接受 `subscribe`**（`agents: ["*"]` 或具体 id 数组；`channels` 缺省＝全部）。它只影响本连接收到哪些 delta，⛔ 不携带任何指令语义。
 - ✅ **保活走协议层帧**：服务端定时发送 WebSocket **ping 帧**（RFC 6455），浏览器**自动回 pong 帧**（JS 不参与，无需应用层消息）；服务端用 `ws` 库的 `pong` 事件判活。这样客户端→服务端的应用层消息面收敛为**一条**。
 - ⛔ 收到任何非 `subscribe` 的应用层消息 → 立即关闭连接（`1008 policy violation`）并记审计；这是「WS 不得成为下发通道」在协议层的最小化落实（✅ §18.3）。
 
@@ -1484,7 +1475,7 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 |---|---|
 | 扇出 | Agent 上报 → 落库 → `PUBLISH live:metrics`（Redis Pub/Sub）→ 各 WS 连接广播（✅ §18.2；Pub/Sub 不持久化，与「不补传」一致） |
 | 顺序 | 先 `snapshot` 后 `delta`；掉线期间的 delta **不补**（✅ 无断点续传） |
-| 保活 | 服务端定时发**协议层 ping 帧**；超时未收到协议层 `pong` 帧即断开并清理（✅ 本轮决策） |
+| 保活 | 服务端定时发**协议层 ping 帧**；超时未收到协议层 `pong` 帧即断开并清理（✅ 已定） |
 | 重连 | 前端指数退避重连，重连成功即**重新拉全量快照**（✅） |
 | 脱敏 | `/ws/public` 的 `snapshot`/`delta` 与公开 REST 一致（无 IP/内网、仅别名+状态+指标概览） |
 | 多实例 | 因走 Pub/Sub，core 多实例/多 worker **零改动**（✅） |
@@ -1508,22 +1499,22 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 
 ### 6.2 面板链路（必须覆盖）
 
-1. 未登录访问 `/api/v1/hosts` → 401 `session_expired`。
-2. 登录 + 2FA 未完成时访问业务接口 → 403 `totp_required`。
+1. ✅ 未登录访问 `/api/v1/hosts` → 401 `session_expired`（已覆盖：`server/test/hosts.api.test.js`）。
+2. ✅ 登录 + 2FA 未完成时访问业务接口 → 403 `totp_required`（`setup_required` → 403 `totp_setup_required`）。
 3. 状态变更缺 `X-CSRF-Token` → 403 `csrf_invalid`。
 4. 登录成功 / 2FA 通过 / 改密后 `sid` **必须变化**（防会话固定，✅ 决策 #32）。
 5. 第 4 个并发登录 → 最旧会话被踢（✅ 决策 #32）；`logout-all` 后全部 401。
 6. `role='user'`（普通用户）的账号 POST 规则 → 403 `role_denied` + 审计。
-7. `/api/public/*` 响应体断言**不含** `last_ip`/`reported_ip`/内部 UUID/`agent_key`（⛔ 决策 #21）。
-8. 关闭 `public_view.enabled` → 公开接口全部 404。
+7. ✅ `/api/public/*` 响应体断言**不含** `last_ip`/`reported_ip`/内部 UUID/`agent_key`（⛔ 决策 #21；已覆盖：`server/test/status.service.test.js` 的"字段全填满的 agent"用例 + `server/test/public.api.test.js`）。
+8. ✅ 关闭 `public_view.enabled` → 公开接口全部 404（且改回后**同一个进程实例**立刻恢复 200，证明是每请求判定）。
 9. `metrics?from&to` 超出该 step 允许范围 → 400 `range_too_large`；`step=auto` 回传实际档位。
 
-**以下为登录 / 改密 / 2FA 的专项验收用例（✅ = 已实现并有测试覆盖；测试落点见 §4.1.1 ⑦）**
+**以下为登录 / 改密 / 2FA 的专项验收用例（✅ = 已实现并有测试覆盖；测试落点与验收待办见 `docs/api-status.md` §2、§3.6）**
 
 10. ✅ 登录失败（账号不存在 / 密码错 / 已禁用）→ 均为 401 `invalid_credentials`，且**响应体与耗时不可区分**（等时校验）。
-11. ✅ `security.require_2fa=true` 且未绑定 TOTP → 登录成功但进入受限态：`me` 与改密返回 403 `totp_setup_required`（`me` 的返回见 §4.1.1 ⑧ D2），登出仍可用。
+11. ✅ `security.require_2fa=true` 且未绑定 TOTP → 登录成功但进入受限态：`me` 与改密返回 403 `totp_setup_required`（`me` 的返回见 §4.1.0 三态矩阵与 `docs/api-status.md` §4.1 D2），登出仍可用。
 12. ✅ TOTP 码错误 → 400 `invalid_totp`；**同一步号在 30s 窗口内重复使用 → 拒绝**（`totp:used:<uid>` 防重放，审计 `reason='replayed_step'`；+31s 新步号放行）。
-13. ✅ 恢复码用后即废（同一码第二次 → 400），响应含 `remaining_recovery_codes`；`require_2fa=true` 时禁止自助解绑（§4.1.1 ⑧ D3，409 `conflict`）。
+13. ✅ 恢复码用后即废（同一码第二次 → 400），响应含 `remaining_recovery_codes`；`require_2fa=true` 时禁止自助解绑（`docs/api-status.md` §4.1 D3，409 `conflict`）。
 14. ✅ 登录限流：`/auth/login`、`/auth/2fa/verify` 与 `/auth/2fa/recovery/verify` 共用 `ratelimit:login:<ip>`（10 次/5 分钟，超限 429 + `Retry-After`）。
 
 **以下为人机验证（滑块）的专项验收用例（✅ 已实现并有测试覆盖：`server/test/auth.captcha.test.js`；完整清单见 `docs/slider-captcha-selfbuilt.md` §10.3）**
@@ -1539,29 +1530,11 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 
 ---
 
-## 7. 待 Owner 拍板清单（API 视角）
+## 7. 决策与落地状态（指针）
 
-> ✅ **本清单已清空**：A1–A14 全部拍板（下表逐条标注结论与落点）。唯一保留的开放项是 **A13 的 SSO 对接细节**（`docs/database.md` §12.2 N3），不阻塞任何里程碑。
-> ✅ **D1–D6 已全部按建议实现（2026-10-02，B6/B7 落地），待 Owner 追认**；逐条见 **§4.1.1 ⑧**。新增 **D7**（setup 在 `totp_pending` 态的安全收敛，见 ⑧）与 D2 同类：实现与 §4.1 原文字面有偏差，理由已写明，等追认。
-> 🆕 **2026-10-03 新增范围：滑动验证码**（原设计文档未覆盖此项）——选型调研见 `docs/slider-captcha.md`（**C1 已定 = 自建**），实施规范见 `docs/slider-captcha-selfbuilt.md`（开放决策 **C6–C11**：本轮**已按文档建议实现**——按账号计数、阈值 1、成功不重置、token 绑定 IP，待 Owner 追认）。触发策略：**首次登录不要求，出现密码错误后引入人机验证**。✅ **契约已并入本文**（§1.2 ② 豁免范围、§1.3 错误码 `captcha_required`/`captcha_invalid`、§1.4 独立限流桶 `ratelimit:captcha:<ip>`、§4.1 两个端点与登录端点改动、§4.10 白名单两个 key、§6.2 用例 15–18）；✅ **契约与代码均已落地**（集成用例 `server/test/auth.captcha.test.js`），⏳ 待 Owner 跑 `npm test` 验收。
-> 🆕 **2026-10-03 新增范围二：人机验证提供方切换为极验 v4** —— 变更方案见 `docs/geetest-captcha.md`。**已定**：**C12**（新增 `CAPTCHA_PROVIDER`，**默认 `geetest`**，自建滑块**保留**为可选 provider、⛔ 不删代码）、**C13**（极验不可达时 **fail-open 放行**；连带义务：审计 `auth.captcha_unavailable` + `logger.error` + 3s 超时且不重试）、**C16**（用极验**官方按钮**：`product='popup'`，按钮 DOM 在页面加载时生成、容器默认隐藏，**密码错后才显示**）。**待定**：C14（`captcha_unavailable` 错误码登记，§1.3 由 26 → 27 条）、C15（`gt4.js` 引入方式）、C17（⛔ 不传 `userInfo`）、C18（**保持现有两步端点契约**，不改成一次提交）、C19（熔断 / 出站并发上限）。⛔ **尚未落地**：本节 §1.3 / §1.4 / §4.1 描述的都是**自建滑块的现状**；极验的字面契约（§6 的双 provider 分支、`details.reason` 新枚举）随 **S5–S9** 落地后才并入本文。⚠️ 另需注意：`CAPTCHA_PROVIDER` 默认值改为 `geetest` 后，**既有部署升级到该版本会因缺密钥启动失败**（刻意的 fail-fast，见变更方案 §8.1）。
-
-| # | 议题 | 建议 |
-|---|---|---|
-| A1 | ✅ 已定：canonical 固定 `\n` 分隔（4 处），path 仅路径不含 query | 见 §2.1；配共享测试向量 |
-| A2 | ✅ 已定：公开接口用独立 `public_slug`，⛔ 不含内部 UUID | 见 §3.1、`docs/database.md` §5.1 |
-| A3 | ✅ 已定：幂等命中**不加** `duplicate: true`，响应形态恒定 | 见 §2.1 |
-| A4 | ✅ 已定：压缩前 **1MB** / 解压后 **4MB**（Agent 侧单批熔断阈值 256KB） | 见 §2.1、`docs/agent.md` §5.3 |
-| A5 | ✅ 已定：**保留**心跳端点，限流**共用** Agent 桶 | 见 §2.2 |
-| A6 | ✅ 已定：指标维度写进指标名（方案 A），`metrics` 参数接受**基名或全名** | 见 §4.3；step 范围表按 §4.3 实施 |
-| A7 | ✅ 已定：WS 应用层**只允许 `subscribe`**；保活改用**协议层 ping/pong 帧**（浏览器自动回）；其它消息 → 关闭 `1008` | 见 §5.2、§5.3 |
-| A8 | ✅ 已定：`install_hint` **带 key（`VANTAGE_KEY` env 内联）+ 另给交互式/`--key-file` 两种形式**；`agent_key`/`agent_secret` 同时单独展示一次；⛔ 仍禁 `--key` 参数 | 见 §4.4「决策 #37 修订」；✅ 设计文档 v0.8 §12.2/§13/#37 已同步修订 |
-| A9 | ✅ 已定：**面板自助绑定 TOTP**（setup/enable/disable + `security.require_2fa` 强制策略） | 见 §4.1 |
-| A10 | ✅ 已定：分页用 **cursor（keyset）**，`limit` 默认 20/上限 200 | 见 §1.2 |
-| A11 | ✅ 已定：权限两级 `admin` / `user`，且 **`user` 纯只读**（所有写操作仅 `admin`） | 见 §4.9 |
-| A12 | ✅ 已定：**不做**事件 `ack`，用 `silences` + 规则 `cooldown` 覆盖 | 见 §4.6 |
-| A13 | ✅ 已定：**两条恢复渠道**——① 一次性恢复码（10 个、哈希存储、用后作废、可重新生成）；② 管理员后台 `POST /api/v1/users/{id}/2fa/reset`（清绑定 + 作废恢复码 + 踢下线 + 审计） | 见 §4.1、§4.9 |
-| A14 | ✅ 已定：面板开关存 **PG `settings` 表**（白名单 key + JSONB），`PATCH /api/v1/settings` 立即生效并写审计 | 见 §4.10、`docs/database.md` §5.4 |
+> **本清单已迁出**：`A1–A14`、`D1–D7`、`C1–C19` 与 2026-10-04 的本轮拍板，全部记录在 **`docs/api-status.md` §4**；尚未拍板的条目集中在 **该文件 §5**。
+> ✅ 状态：A1–A14 全部已定；D1–D7 已于 2026-10-04 **全部追认**；C14/C15/C17/C18 已采纳、C19 熔断已落地（出站并发上限 2026-10-04 拍板要做，见 `docs/api-status.md` §3.6 S9）。
+> ⛔ 本文不再维护第二份状态/待办清单——两份清单必然漂移，这正是 2026-10-04 拆分文档的原因。
 
 ---
 
@@ -1579,7 +1552,7 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 | §2.3 | §2.1 单向宗旨、§10.2 ⛔ 无下发接口、§12.4 |
 | §3 | §5.4 公开可见性、决策 #10/#21、§8 IP 隐私 |
 | §4.1 | §18.1 有状态会话、决策 #31/#32（会话轮换与 CSRF）、A9/A13（2FA 自助绑定与两条恢复渠道） |
-| §4.1.1 | §18.1 会话模型、§5.2 默认拒绝——**本轮实现规范（①–⑨）**：三态矩阵、`totp:used` 防重放、落地顺序、D1–D7 |
+| （原 §4.1.1） | 已迁至 `docs/api-status.md` §3：§18.1 会话模型、§5.2 默认拒绝——实现规范（①–⑨）：三态矩阵、`totp:used` 防重放、落地顺序、D1–D7 |
 | §4.2–4.3 | §5.3 心跳/离线、§6.5 漂移、§8 IP 历史、§9 时序与降采样 |
 | §4.4 | §6.1 凭证、§12.2–12.3 安装流程、决策 #15/#37 |
 | §4.5–4.7 | §7.1–7.3 告警规则/通道/风暴防护、决策 #22/#23 |

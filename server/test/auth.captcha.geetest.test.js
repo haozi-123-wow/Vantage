@@ -277,6 +277,40 @@ test('AC-G5 验题：⛔ 只发一次请求（不重试）、URL/body/签名正�
   assert.equal(await redis.get(keys.captchaOk(token)), null, '登录成功即消费（一次性）');
 });
 
+test('AC-G5b 前端**原样转发** getValidate()（多一个 captcha_id）也必须通过 schema 校验', async () => {
+  const user = await seedUser();
+  await failOnce(user);
+
+  // ⚠️ 极验的 `getValidate()` 实测返回 **5** 个字段（它就是客户端 `/verify` 响应里 `data.seccode`
+  //    的原样对象，`captcha_id` 打头）。历史缺陷：服务端白名单只放行 4 个 → 这里 400 `schema_invalid`，
+  //    表现为「极验弹窗显示验证通过、用户却永远登不进去，紧接着登录再吃 400 `captcha_required`」。
+  const verify = await submit({ overrides: { captcha_id: GEETEST_ID } });
+  assert.equal(verify.statusCode, 200, verify.body);
+
+  const token = verify.json().captcha_token;
+  assert.equal(await redis.get(keys.captchaOk(token)), IP_A);
+
+  // ⛔ 放行 ≠ 使用：进来的 `captcha_id` 不得被转发给极验 —— 出站用的是服务端配置里的 id，且走 URL query
+  assert.equal(fetchCalls.length, 1, '⛔ 不重试：一次校验只发一次请求');
+  const params = new URLSearchParams(fetchCalls[0].options.body);
+  assert.equal(params.has('captcha_id'), false, 'captcha_id 走 URL query，不进 body');
+
+  const ok = await injectLogin({ username: user.username, password: PASSWORD, captchaToken: token });
+  assert.equal(ok.statusCode, 200, ok.body);
+});
+
+test('AC-G5c 白名单没有放松：其它多余字段照旧 400 schema_invalid 且不打极验', async () => {
+  const res = await submit({ overrides: { user_info: 'admin' } });
+  assert.equal(res.statusCode, 400, res.body);
+  assert.equal(res.json().error.code, 'schema_invalid');
+  assert.equal(
+    JSON.stringify(res.json().error.details).includes('user_info'),
+    true,
+    'details 要指出被拒的多余字段',
+  );
+  assert.equal(fetchCalls.length, 0, 'schema 不通过时连极验都不该调用');
+});
+
 test('AC-G6 极验明确判定 fail → 400 captcha_invalid(validate_failed) + 审计（⛔ 不含 pass_token）', async () => {
   const user = await seedUser();
   await failOnce(user);
@@ -391,6 +425,11 @@ test('AC-G10 同一 captcha_token 登录成功后再用 → 400 captcha_invalid�
 
   assert.equal((await injectLogin({ username: user.username, password: PASSWORD, captchaToken: token })).statusCode, 200);
 
+  // ⚠️ 决策 A（成功登录清零失败计数）落地后，"刚成功过"的账号**不再处于要求验证的状态** ——
+  //    要复现"复用已消费的 token"，必须先把闸门重新立起来（再错一次密码）；
+  //    否则旧 token 根本不会被读取，登录会以 200 通过（那是正常行为，不是 token 被接受）。
+  await failOnce(user);
+
   const reuse = await injectLogin({ username: user.username, password: PASSWORD, captchaToken: token });
   assert.equal(reuse.statusCode, 400);
   assert.equal(reuse.json().error.code, 'captcha_invalid');
@@ -424,6 +463,45 @@ test('密码又错时不消费 token（⛔ 用户不必重新点一次验证）�
   const callsBefore = fetchCalls.length;
   assert.equal((await injectLogin({ username: user.username, password: PASSWORD, captchaToken: token })).statusCode, 200);
   assert.equal(fetchCalls.length, callsBefore, '重试登录不该再调用极验');
+});
+
+// -----------------------------------------------------------------------------
+// AC-G13：成功登录清零失败计数（✅ 2026-10-04 Owner 决策 A；语义与提供方无关）
+// -----------------------------------------------------------------------------
+
+test('AC-G13 登录成功后清零两个失败计数 → 窗口内不再反复要求人机验证', async () => {
+  const user = await seedUser();
+
+  // ① 错一次密码：两个计数各 1（阈值默认 1 → 已进入"要求验证"状态）
+  const bad = await failOnce(user);
+  assert.equal(bad.json().error.details.captcha_required, true);
+  assert.equal(Number(await redis.get(keys.loginFailIp(IP_A))), 1);
+  assert.equal(Number(await redis.get(keys.loginFailAcct(user.username))), 1);
+
+  // ② 这次密码**是对的**，但缺凭证 → 400：闸门在验密之前，用户看不到"密码错"
+  const gated = await injectLogin({ username: user.username, password: PASSWORD });
+  assert.equal(gated.statusCode, 400);
+  assert.equal(gated.json().error.code, 'captcha_required');
+
+  // ③ 走完人机验证拿一次性凭证 → 登录成功
+  const verify = await submit();
+  assert.equal(verify.statusCode, 200, verify.body);
+  const ok = await injectLogin({
+    username: user.username,
+    password: PASSWORD,
+    captchaToken: verify.json().captcha_token,
+  });
+  assert.equal(ok.statusCode, 200, ok.body);
+
+  // ④ ✅ 决策 A 的核心：两个计数器必须被清零
+  assert.equal(await redis.get(keys.loginFailIp(IP_A)), null, '成功登录必须清掉 IP 维度计数');
+  assert.equal(await redis.get(keys.loginFailAcct(user.username)), null, '成功登录必须清掉账号维度计数');
+
+  // ⑤ 于是**不带任何验证参数**再登录一次也应当直接成功（否则窗口内每次登录都要重验一遍）
+  const callsBefore = fetchCalls.length;
+  const again = await injectLogin({ username: user.username, password: PASSWORD });
+  assert.equal(again.statusCode, 200, again.body);
+  assert.equal(fetchCalls.length, callsBefore, '计数已清零 → 不该再要求验证、也不该再打极验');
 });
 
 // -----------------------------------------------------------------------------

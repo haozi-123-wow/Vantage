@@ -42,6 +42,22 @@ export interface RealtimeSeries {
   points: Array<[number, number]>
 }
 
+/**
+ * 列表端点的统一响应壳（✅ docs/api.md §1.2 ③，2026-10-04 定）。
+ * ⚠️ `next_cursor` 一期恒为 `null`（状态类接口没有 keyset 的自然键，见 `docs/server-status-api.md` §2.8）——
+ * 前端按"有值才翻页"处理即可，⛔ 不要自己造页码。
+ */
+export interface ListResponse<T> {
+  items: T[]
+  next_cursor: string | null
+}
+
+/** 主机列表额外带快照生成时间（服务端/缓存同一时刻） */
+export interface HostsResponse<T> extends ListResponse<T> {
+  /** RFC3339；命中服务端响应缓存时 = 缓存生成时刻 */
+  updated_at: string
+}
+
 /** 公开视图的每机快照（docs/api.md §3.2；⛔ 不含 IP / 内部标识） */
 export interface PublicSnapshot {
   cpu_pct: number | null
@@ -49,39 +65,100 @@ export interface PublicSnapshot {
   disk_pct: number | null
   net_rx_bps: number | null
   net_tx_bps: number | null
+  /** ⚠️ 无 GPU 序列时**整个字段缺省**（不是 null）—— 面板据此整块隐藏 GPU 图 */
   gpu_pct?: number | null
 }
 
-/** 公开视图的主机条目（⛔ 只用 display_name，且只给 slug 不给内部 UUID） */
+/**
+ * 公开视图的主机条目（docs/api.md §3.2；标识用 `public_slug`，⛔ 无内部 UUID）。
+ * ⚠️ `os` / `uptime` 缺失时**字段缺省**（不是 null）：与 `docs/server-status-api.md` §6.5 一致。
+ */
 export interface PublicHost {
   slug: string
   name: string
-  status: HostStatus
+  /** ⛔ 公开侧不出现 `disabled`（人工禁用是内部运营信息） */
+  status: Exclude<HostStatus, 'disabled'>
   os?: string
   uptime?: number
   snapshot: PublicSnapshot
   probes: { up: number; down: number }
-  last_seen_ago?: number
+  /** 中文相对化文案；从未上报 / `disabled` 时为 null（⛔ 不编造"超过 30 天"） */
+  last_seen_ago: string | null
+  /** **分钟级取整**后的绝对时间（防上下线行为指纹）；从未上报时为 null */
+  last_seen_at: string | null
 }
 
-/** `GET /api/public/summary` */
+/** `GET /api/public/summary` / `GET /api/v1/summary`（**同一形状**，前端可共用类型） */
 export interface PublicSummary {
   total: number
   online: number
   offline: number
+  /** ➕ 2026-10-04：原字段表漏了它，但顶栏「禁用 N」需要；`total = online + offline + disabled` */
+  disabled: number
   alerts: { critical: number; warn: number; info: number }
   updated_at: string
 }
 
-/** `GET /api/public/probes`（target_host 已脱敏） */
+/** 面板汇总（`GET /api/v1/summary`）—— 与公开汇总同形，仅在"是否免登录"上不同 */
+export type PanelSummary = PublicSummary
+
+/**
+ * 维度展开块的一行（公开侧专用）。
+ * ⚠️ `label` 是**服务端生成的泛化标签**（「磁盘 1」/「网卡 1」）——
+ * 公开侧⛔ 不下发设备名与挂载点（`docs/api.md` §3.1），故前端只能展示这个标签。
+ */
+export interface PublicDeviceRow {
+  label: string
+  [field: string]: number | string | null
+}
+
+/** 公开单机展开块（`GET /api/public/hosts/{slug}/now` 的 `cpu`/`memory`） */
+export interface PublicUsageSummary {
+  usage_pct?: number | null
+  load1?: number | null
+  load5?: number | null
+  load15?: number | null
+  ctx_switch?: number | null
+  total_bytes?: number | null
+  used_bytes?: number | null
+  used_pct?: number | null
+  available_bytes?: number | null
+  cached_bytes?: number | null
+  buffers_bytes?: number | null
+}
+
+/**
+ * `GET /api/public/hosts/{slug}/now` —— 公开单机当前快照（就地展开）。
+ * = 列表条目 + 分区/网卡/GPU 数组；⛔ 无指标名、无设备名、无 IP、无内部 UUID。
+ */
+export interface PublicHostNow extends PublicHost {
+  cpu: PublicUsageSummary
+  memory: PublicUsageSummary
+  disks: PublicDeviceRow[]
+  networks: PublicDeviceRow[]
+  gpus: PublicDeviceRow[]
+  updated_at: string
+}
+
+/** `GET /api/public/probes` 的一项（`target_host` 已按口径脱敏） */
 export interface PublicProbe {
-  slug: string
+  slug: string | null
+  host_name: string | null
+  /** 探活名（Agent 本地 config.yaml 里起的名字，如「网关」「官网」） */
   name: string
-  target_host: string
+  /** 域名 / 公网 IP / 哨兵值「内网地址」；解析不出来时为 null */
+  target_host: string | null
   type: string
   up: boolean
   latency_ms: number | null
-  checked_at: string
+  checked_at: string | null
+}
+
+/** `GET /api/public/probes` 响应（⛔ 不是裸数组） */
+export interface PublicProbesResponse extends ListResponse<PublicProbe> {
+  /** 条数被服务端上限截断（⛔ 不静默丢数据，前端应提示"仅显示前 N 条"） */
+  truncated: boolean
+  updated_at: string
 }
 
 /** 面板账号（⛔ 任何接口都不得返回 password_hash / totp_secret_enc，docs/api.md §4.9） */

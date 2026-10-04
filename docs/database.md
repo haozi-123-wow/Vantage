@@ -569,15 +569,19 @@ POST /api/v1/agent/report
 | `live:metrics` | Pub/Sub 频道 | 不持久化 | 实时扇出（上报→落库→PUBLISH） | ✅ §9、§18.2 |
 | `ratelimit:login:<ip>` | 计数 | 窗口期 | 登录限速 | ➕ §13 |
 | `ratelimit:public:<ip>` | 计数 | 窗口期 | 公开接口/公开 WS 严格限流 | ➕ §5.4 |
-| `snapshot:agent:<id>` | hash/string | 5–15s | 公开「当前快照」缓存 | ➕ §5.4「带缓存」 |
+| `snapshot:agent:<id>` | hash/string | 5–15s | 公开「当前快照」缓存。⏳ **暂无写入方**：`/api/public/*` 已改用下面两个响应级键（每机粒度与「全量列表」端点不匹配），本键保留给将来的 `/ws/*` 实时扇出复用 | ➕ §5.4「带缓存」 |
+| `snapshot:public:hosts` | string(JSON) | `PUBLIC_CACHE_TTL_S`（默认 **10s**，0 = 关） | `/api/public/hosts` 的**响应体**缓存（值 = 已脱敏的完整响应，含 `updated_at`）。⛔ 绝不缓存含 IP / 内部 UUID 的私有响应 | ✅ `docs/server-status-api.md` §2.4（决策 D4） |
+| `snapshot:public:summary` | string(JSON) | 同上 | `/api/public/summary` 的**响应体**缓存 | ✅ 同上 |
+| `snapshot:public:now:<slug>` | string(JSON) | 同上 | `/api/public/hosts/{slug}/now` 的**响应体**缓存。⚠️ 键数量 ≈ 主机数（slug 是公开标识、只有存在的主机才会写），故不存在"被枚举撑爆"的风险 | ✅ 同上 |
+| `snapshot:public:probes` | string(JSON) | 同上 | `/api/public/probes` 的**响应体**缓存 | ✅ 同上 |
 | `ip:recent:<agent_id>` | list/zset | 10min | Flapping 判定（窗口内变化次数） | ➕ 决策 #39 |
 | `notify:tokenbucket:<channel_id>` | hash | 常驻 | 通道令牌桶 | ➕ 决策 #23 |
-| `totp:used:<user_id>` | set | **90s** | TOTP 步号防重放（同一步只接受一次；✅ B7 已落地，此处补登记） | ✅ `docs/api.md` §4.1.1 ④ |
+| `totp:used:<user_id>` | set | **90s** | TOTP 步号防重放（同一步只接受一次；✅ B7 已落地，此处补登记） | ✅ `docs/api-status.md` §3.3（原 `api.md` §4.1.1 ④） |
 | `ratelimit:captcha:<ip>` | 计数 | 60s 窗口 | 滑块取题/验题限流（⛔ 与 `ratelimit:login` **独立**，"换一张图"不该消耗登录额度） | ✅ S 系列、`docs/api.md` §1.4 |
 | `captcha:<captcha_id>` | hash | **120s** | 滑块题目与**答案**（`x`、`y`、`created_at`、`attempts`）；⛔ 答案只在 Redis，不进 PG/日志/响应 | ✅ S 系列 |
 | `captcha:ok:<captcha_token>` | string | **120s** | 人机验证通过后的一次性凭证，**值 = 解出该题的 IP**（防 token 转卖） | ✅ S 系列 |
-| `login:fail:ip:<ip>` | 计数 | 登录窗口（默认 300s） | 登录失败计数（按 IP）→ 决定"是否要求人机验证" | ✅ S 系列 |
-| `login:fail:acct:<sha256(用户名)[:16]>` | 计数 | 登录窗口（默认 300s） | 登录失败计数（**按账号**）→ 兜住"代理池每个 IP 只试一次"的绕过；⛔ 键里不放明文用户名 | ✅ S 系列 |
+| `login:fail:ip:<ip>` | 计数 | 登录窗口（默认 300s） | 登录失败计数（按 IP）→ 决定"是否要求人机验证"；✅ **登录成功后清零**（2026-10-04 决策 A：不清零会让窗口内"错过一次"的账号每次登录都被要求验证） | ✅ S 系列 |
+| `login:fail:acct:<sha256(用户名)[:16]>` | 计数 | 登录窗口（默认 300s） | 登录失败计数（**按账号**）→ 兜住"代理池每个 IP 只试一次"的绕过；⛔ 键里不放明文用户名；✅ **登录成功后清零**（同上） | ✅ S 系列 |
 | `captcha:vendor:down:<provider>` | 计数 | **30s** | 外部人机验证服务（极验）的**短时熔断**标记：不可达后置位，期间不再干等超时；`failMode=open` 时"熔断 = 该层视为不存在"（出题 404、登录不要求验证），`closed` 时仍要求凭证但立即 503。🔑 它是**性能优化而非安全控制**：读不到按未熔断处理 | ✅ S7、`docs/geetest-captcha.md` §9.3（C19） |
 >
 > 📌 **已落地（S7，2026-10-03）**：人机验证提供方已切为**极验 v4**（`CAPTCHA_PROVIDER`，未设置时按密钥自动推断，见 `docs/geetest-captcha.md` §8.1/§16）。对键空间的影响只有三点：① `captcha:<captcha_id>` 在 **`provider=geetest` 下不再使用**（题目与答案由极验云端管理，我们没有答案可存），`provider=selfbuilt` 下照旧；② `captcha:ok:*`、`login:fail:*`、`ratelimit:captcha:*` 四个键**完全不变** —— 它们是提供方无关的编排层（策略、计数、一次性凭证），这正是选「两步端点契约」的直接收益；③ 新增 `captcha:vendor:down:<provider>`（上表末行）。⚠️ `ratelimit:captcha:<ip>` 在极验下**更重要**：`/captcha/verify` 已成为全站唯一「匿名可触发外呼」的端点，此桶同时是外呼放大器的闸门。
@@ -609,7 +613,15 @@ POST /api/v1/agent/report
 ### 8.2 定时任务（➕ 建议规格）
 
 > ✅ **已实现（M1.5，2026-09-26）**：建分区 / Drop 分区 / 聚合 1m / 聚合 5m / 清理降采样 / 清理非时序表 六项已落地
-> （`server/src/services/{partition,downsample,retention,cron}.service.js`）。剩余三项（离线判定 / Flapping 恢复 / 凭证轮换提醒）仍属 M3。
+> （`server/src/services/{partition,downsample,retention,cron}.service.js`）。
+> ✅ **离线判定已落地（2026-10-04）**：`server/src/services/offline.service.js` + `cron.service.js` 的
+> `offline_sweep` 任务（默认每 30s，取自 `HEARTBEAT_SWEEP_INTERVAL_S`）。
+> ⚠️ 落地时的两处实现选择（结果与设计一致，但落点不同，见 `docs/api-status.md` §4.4 偏差登记）：
+> ① 判定用**单条 `UPDATE ... WHERE`**，靠 PG 在 READ COMMITTED 下"并发更新后重新求值 WHERE"来与上报路径串行
+> （写成"先 SELECT 再逐条 UPDATE"会在"刚上报完"的机器上产生 offline 抖动）；
+> ② 状态接口（`/api/public/hosts`、`/api/v1/hosts`）仍**按读取时推导**，⛔ 不直接读 `agents.status`
+> —— 让接口的正确性不依赖 cron 的存活（cron 静默挂掉时，直接读字段的接口会开始"报平安"而无人察觉）。
+> 剩余两项（Flapping 恢复 / 凭证轮换提醒）仍属 M3。
 > **为什么提前**：迁移只预建「今天 +7」天分区，而兜底分区一旦落进某天的数据，该日期就**无法事后补建**（实测 `23514`），
 > 15 天保留期也会随之静默失效 —— 这是带死线的问题。详见 `docs/design-deltas.md` §9。
 > ⚠️ 两处实现差异（结果等价）：① 桶对齐改用 `to_timestamp(floor(extract(epoch from ts)/N)*N)` 而非 `date_trunc`
@@ -624,7 +636,7 @@ POST /api/v1/agent/report
 | 聚合 5m | 每 5 分钟 | 同上写入 `metrics_5m` | ✅ |
 | 清理降采样 | 每日 1 次 | 1m > 90d、5m > 1y；**不分区分批 DELETE**（1 万行/批，见 §5.8） | ✅ 幂等（按 `bucket` 条件删） |
 | 清理非时序表 | 每日 1 次（建议低峰） | 按 §8.1：`probe_results` 90d、`process_snapshots` 30d、`agent_ip_history` 180d、`notification_log` 180d、`audit_logs` 365d、过期 `silences`；**分批 DELETE**（建议每批 1 万行）避免长事务与膨胀 | ✅ 幂等（按时间条件删） |
-| 离线判定 | 建议每 15–30s | `now()-last_seen_at > 3×周期` → 置 `offline` + 触发离线告警（§5.3） | ✅ 状态迁移需防抖（只在 online→offline 时发告警） |
+| 离线判定 | ✅ 已实现：每 **60s**（`HEARTBEAT_SWEEP_INTERVAL_S`） | `now()-last_seen_at > 阈值` → 置 `offline`（⚠️ 2026-10-04 校正：阈值 = **30s × `OFFLINE_CYCLES_MULTIPLIER`（默认 3）= 90s**，因为 Agent 的 `report.interval` 默认已是 30s 而非旧文所写的 15s；见 `docs/agent.md` G3 与 `server/src/services/offline.service.js`） | ✅ 状态迁移需防抖（只在 online→offline 时发告警；已由 `UPDATE ... WHERE status='online'` 保证） |
 | Flapping 恢复 | 每 1 分钟 | 稳定期后清 `agents.ip_flapping`（决策 #39） | ✅ |
 | 凭证轮换提醒 | 每日 1 次 | 扫描 `now() - COALESCE(rotated_at, created_at) > credential_rotate.reminder_days`（默认 90）的 Agent → 面板徽标 + 经 `channels` **每日提醒一次**给管理员 → 写 `rotate_reminder_at`（✅ 本轮决策，见 §5.2） | ✅ 按日期去重；未处理则次日再提醒 |
 

@@ -159,7 +159,7 @@ export function createAuthService({ pool, redis, config, logger, captcha }) {
      *
      * 检查顺序（⛔ 不可调换，docs/slider-captcha-selfbuilt.md §2.3）：
      *   ① 登录限流（路由层 preHandler）→ ② 读人机验证策略与失败计数 → ③ 校验 `captcha_token`
-     *   → ④ 查库 + 验密码 → ⑤ 失败则两个计数器 +1 → ⑥ 成功则消费 token。
+     *   → ④ 查库 + 验密码 → ⑤ 失败则两个计数器 +1 → ⑥ 成功则**清零两个计数器** + 消费 token。
      * 🔑 ③ 必须在 ④ 之前：否则攻击者不必通过人机验证就能让服务端每次跑满 19MiB 的 Argon2，
      *    等于白送一个 DoS 放大器。
      *
@@ -202,6 +202,11 @@ export function createAuthService({ pool, redis, config, logger, captcha }) {
         });
       }
 
+      // ⑥ 密码已验对（无论是完整登录，还是仍需去过第二步）：清零人机验证的两个失败计数
+      //    —— ✅ 2026-10-04 Owner 决策 A。⛔ 必须放在上面那个失败分支**之后**：失败路径的计数由
+      //    `bumpLoginFailure` 负责，提前清掉就等于把"错一次就要验证"这条防护变成空话。
+      await captcha.clearLoginFailures({ ip, username });
+
       const require2fa = await getSettingBool(redis, pool, 'security.require_2fa', {
         ttlS: config.security.settingsCacheTtlS,
         logger,
@@ -226,7 +231,7 @@ export function createAuthService({ pool, redis, config, logger, captcha }) {
       //    此时**不该**把 last_login_* 更新成"成功登录"的样子（审计与排障都要靠这两列）。
       await touchLogin(pool, user.id, { ip, method: 'password' });
 
-      // ⑥ 登录成功才消费一次性人机验证凭证（⛔ 失败不消费：见 captcha.service.js 文件头第 4 条）
+      // ⑦ 登录成功才消费一次性人机验证凭证（⛔ 失败不消费：见 captcha.service.js 文件头第 4 条）
       const captchaUsed = await captcha.consumeLoginToken({ captchaToken });
 
       await audit({

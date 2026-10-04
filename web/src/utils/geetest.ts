@@ -11,7 +11,8 @@
  *
  * ⚠️ `gt4.js` 是 **loader**：真正的验证库还会由它继续从极验域名拉取（§15）。所以"脚本加载完成"
  *    只代表第一跳通了，**不代表极验可用**；后续失败一律走实例的 `onError`。
- * ⛔ 本文件只干一件事：把全局 `initGeetest4` 弄到手。**不做任何判定**（前端判对错 = 零防护价值）。
+ * ⛔ 本文件的职责边界：把全局 `initGeetest4` 弄到手 + 声明**厂商对象的形状** + `toVerifyBody()`
+ *    这个**纯形状投影**。**不做任何判定**（前端判对错 = 零防护价值），也不发任何请求。
  */
 
 /** `gt4.js` 地址（极验的唯一常量） */
@@ -20,12 +21,52 @@ export const GT4_SCRIPT_URL = 'https://static.geetest.com/v4/gt4.js'
 /** 脚本标签上的标记属性，便于排障时在 Elements 面板里一眼认出我们注入的那一个 */
 const SCRIPT_DATASET_KEY = 'vantageGeetest'
 
-/** `captchaObj.getValidate()` 的返回值：4 个字段**原样**交给服务端 `/auth/captcha/verify` */
+/**
+ * `captchaObj.getValidate()` 的返回值 —— ⚠️ **不止 4 个字段**。
+ *
+ * 🔑 **2026-10-04 实测**：极验 v4 的 `getValidate()` 返回的是客户端 `POST /verify` 响应里
+ *    `data.seccode` 的**原样对象**，实测键序为
+ *    `captcha_id, lot_number, pass_token, gen_time, captcha_output`（5 个）。
+ *
+ * ⛔ 因此**绝不允许把本对象整份转发**给 `/auth/captcha/verify`：服务端 schema 是
+ *    `additionalProperties: false` 的白名单，多出来的 `captcha_id` 会让请求以 400
+ *    `schema_invalid` 被拒（真实故障：极验弹窗显示"验证通过"，用户却永远登不进去，
+ *    紧接着登录再吃一个 400 `captcha_required`）。
+ * ➡️ 一律经 `toVerifyBody()` 投影后再提交。
+ */
 export interface GeetestValidate {
   lot_number: string
   captcha_output: string
   pass_token: string
   gen_time: string
+  /**
+   * 极验**会**带上它（公开值，等于 `/auth/captcha/challenge` 下发的那个）。
+   * ⛔ 我们**不**把它提交给服务端：服务端用自己配置里的 `captchaId`（出站走 URL query）。
+   */
+  captcha_id?: string
+}
+
+/** `/auth/captcha/verify`（极验分支）的请求体：**只**有服务端白名单里的这 4 个字段 */
+export type GeetestVerifyBody = Pick<
+  GeetestValidate,
+  'lot_number' | 'captcha_output' | 'pass_token' | 'gen_time'
+>
+
+/**
+ * 把 `getValidate()` 的返回值**显式投影**成 `/auth/captcha/verify` 的请求体。
+ *
+ * 🔑 为什么必须显式挑字段，而不是 `captchaVerify(validate)`：
+ *   ① 极验实际返回 5 个字段（见 `GeetestValidate`），整份转发必然 400 `schema_invalid`；
+ *   ② 厂商**将来再加字段**时，这里不会有第二次事故 —— 白名单契约由这一处收口。
+ * ⛔ 本函数是纯投影：不做判定、不丢错误、也不"顺手"补默认值。
+ */
+export function toVerifyBody(validate: GeetestValidate): GeetestVerifyBody {
+  return {
+    lot_number: validate.lot_number,
+    captcha_output: validate.captcha_output,
+    pass_token: validate.pass_token,
+    gen_time: validate.gen_time,
+  }
 }
 
 /**

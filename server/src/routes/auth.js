@@ -227,10 +227,20 @@ const GEETEST_CHALLENGE_RESPONSE_SCHEMA = {
 };
 
 /**
- * `provider=geetest`：验题请求体 = 极验 `getValidate()` 的 4 个字段。
+ * `provider=geetest`：验题请求体 = 极验 `getValidate()` 的返回值。
  *
- * ⛔ 刻意**不收 `captcha_id`**：服务端用自己的配置值。让调用方指定"用哪个验证 id"没有意义，
- *    只会多一个可被拿来探测/伪造的输入面。
+ * ⚠️ **2026-10-04 实测**：`getValidate()` 返回的**不止 4 个字段** —— 它是极验客户端
+ *    `POST /verify` 响应里 `data.seccode` 的**原样对象**，键序为
+ *    `captcha_id, lot_number, pass_token, gen_time, captcha_output`（5 个）。
+ *    本 schema 原先只放行 4 个，于是"前端原样转发"必然 400 `schema_invalid`，
+ *    表现为「极验弹窗显示验证通过、用户却永远登不进去，紧接着登录再吃 400 `captcha_required`」。
+ *
+ * 🔑 `captcha_id` 因此**必须**在放行名单里，但服务端**不读**它：出站二次校验用的是配置里的
+ *    `captchaId`，且走 URL query（见 `utils/geetest.js` 的 `buildValidateUrl`）——
+ *    因此**不存在**「调用方指定用哪个验证 id」的输入面。
+ * ⛔ `additionalProperties: false` 保留：只放行这一个已知的厂商字段，其余多余字段（探测/伪造）依旧被拒；
+ *    对应回归用例见 `test/auth.captcha.geetest.test.js`。
+ *
  * ⚠️ 下面的长度上限是**防御性护栏**（挡畸形/超大 body），**不是**极验的契约；取值刻意宽松，
  *    免得将来极验调整字段长度时把正常用户挡在门外。
  */
@@ -243,6 +253,8 @@ const GEETEST_VERIFY_BODY_SCHEMA = {
     captcha_output: { type: 'string', minLength: 1, maxLength: 4096 },
     pass_token: { type: 'string', minLength: 1, maxLength: 2048 },
     gen_time: { type: 'string', minLength: 1, maxLength: 32 },
+    /** ➕ 极验**会**带上它（公开值）；服务端放行但**不使用**。⛔ 删掉它 = 原样转发的客户端全被 400 挡死 */
+    captcha_id: { type: 'string', maxLength: 128 },
   },
 };
 

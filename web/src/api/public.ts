@@ -8,7 +8,13 @@
  *   调用方用 `isPublicViewDisabled()` 区分该情形并给出登录入口。
  */
 import { AppError, requestJson } from '@/api/http'
-import type { PublicHost, PublicProbe, PublicSummary } from '@/types/domain'
+import type {
+  HostsResponse,
+  PublicHost,
+  PublicHostNow,
+  PublicProbesResponse,
+  PublicSummary,
+} from '@/types/domain'
 
 const BASE_URL = '/api/public'
 
@@ -22,19 +28,28 @@ export function getSummary(signal?: AbortSignal): Promise<PublicSummary> {
   return requestJson<PublicSummary>(BASE_URL, '/summary', { signal })
 }
 
-/** `GET /api/public/hosts` — ⛔ 无 IP、无内部 UUID，标识用 `public_slug` */
-export function getHosts(signal?: AbortSignal): Promise<PublicHost[]> {
-  return requestJson<PublicHost[]>(BASE_URL, '/hosts', { signal })
+/**
+ * `GET /api/public/hosts` — ⛔ 无 IP、无内部 UUID，标识用 `public_slug`。
+ * ⚠️ 2026-10-04 契约修正：列表端点返回 `{ items, next_cursor, updated_at }`（docs/api.md §1.2 ③），
+ *    ⛔ 不再是裸数组。
+ */
+export function getHosts(signal?: AbortSignal): Promise<HostsResponse<PublicHost>> {
+  return requestJson<HostsResponse<PublicHost>>(BASE_URL, '/hosts', { signal })
 }
 
-/** `GET /api/public/hosts/{slug}/now` — 单机当前快照（公开页就地展开用） */
-export function getHostNow(slug: string, signal?: AbortSignal): Promise<PublicHost> {
-  return requestJson<PublicHost>(BASE_URL, `/hosts/${encodeURIComponent(slug)}/now`, { signal })
+/**
+ * `GET /api/public/hosts/{slug}/now` — 单机当前快照（公开页就地展开用）。
+ * ⚠️ 服务端已把设备名/挂载点泛化成「磁盘 1 / 网卡 1」并剥离了 IP 与指标名，
+ *    前端**只能**用返回的 `label` 与固定字段名渲染（⛔ 不要试图反推真实设备）。
+ * slug 不存在**或**该机被人工禁用 → 404（两者不可区分）。
+ */
+export function getHostNow(slug: string, signal?: AbortSignal): Promise<PublicHostNow> {
+  return requestJson<PublicHostNow>(BASE_URL, `/hosts/${encodeURIComponent(slug)}/now`, { signal })
 }
 
-/** `GET /api/public/probes` — 探活当前概览（target 已脱敏） */
-export function getProbes(signal?: AbortSignal): Promise<PublicProbe[]> {
-  return requestJson<PublicProbe[]>(BASE_URL, '/probes', { signal })
+/** `GET /api/public/probes` — 探活当前概览（每机最近一轮；`target_host` 已脱敏） */
+export function getProbes(signal?: AbortSignal): Promise<PublicProbesResponse> {
+  return requestJson<PublicProbesResponse>(BASE_URL, '/probes', { signal })
 }
 
 export const publicApi = { getSummary, getHosts, getHostNow, getProbes }

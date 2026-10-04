@@ -326,7 +326,7 @@ log:
 | G2 | 上报体积上限、重试次数/退避/总时长 | 中心 1MB/4MB（压缩前/解压后）；Agent 单批 **256KB** 熔断（裁剪顺序见 §5.3）、重试 **3 次 / 2s 起指数 / ≤30s** | §5.3、§8 |
 | G5 | `capabilities` 能力声明位置 | ✅ **放进上报体 `host.capabilities`**（首次与能力变化时必填）；中心落 `agents.capabilities`，面板据此隐藏不支持的图表/列；键集合见 `docs/api.md` §2.1 | §3、`docs/api.md` §2.1 |
 | G9 | `uninstall` 是否删除配置与日志 | ✅ **默认保留**（配置/key/日志），只停服务并删二进制与 unit；**`--purge` 才彻底删**（交互确认） | §12.1 |
-| G3 | `report.interval` 默认值 | ✅ **15s**（与设计 §4.5 一致；中心离线阈值 ≈ 3×周期） | §8 |
+| G3 | `report.interval` 默认值 | ✅ **30s**（⚠️ 2026-10-04 校正：原写 15s，但 `agent/internal/config/config.go` 的 `defaultConfig()` 在 G3 修订中已改为 **30s**，采集周期随之对齐 —— cpu/mem/net/gpu 30s、disk/process 60s；中心离线阈值随之从 ≈3×15s 变为 **≈3×30s = 90s**）。⚠️ `heartbeat_interval` 默认 **60s**：纯心跳的最坏上报间隔是 60s 而非 30s | §8 |
 | G4 | 无 GPU 机的采集行为 | ✅ **恒定为跳过**：不报错、日志记 debug、⛔ 不进上报体；`capabilities.gpu.*` 置 false | §3、§8 |
 | G6 | 是否允许 http（非 TLS）中心地址 | ✅ **仅测试环境**，需显式 `center.allow_insecure_http: true`（默认 false）且启动打 WARN；生产强制 https | §8 |
 | G7 | 未知配置字段 | ✅ **拒绝**（启动失败 / `reload` 保留旧配置），错误信息指出未知键路径 | §8 |
@@ -356,20 +356,22 @@ log:
 
 ```bash
 # 形式①：面板默认给出的一键命令（env 内联，复制即用）——⚠️ 会进 shell history
-VANTAGE_KEY=<key> sh -c 'curl -fsSL https://<github-or-mirror>/vantage.sh | sudo -E sh -s -- install \
+# ⚠️ 2026-10-04 校正：**两个凭证都要传**（secret 用于 HMAC 验签，缺了它 Agent 通不过签名校验）。
+VANTAGE_KEY=<key> VANTAGE_SECRET=<secret> sh -c 'curl -fsSL https://<github-or-mirror>/vantage.sh | sudo -E sh -s -- install \
   --center https://vantage.example.com --agent-id <uuid> [--version v0.1.0] [--source <mirror>]'
 
 # 形式②：交互式 / stdin（最安全，面板也给出该形式）
 curl -fsSL https://<github-or-mirror>/vantage.sh | sudo sh -s -- install \
-  --center https://vantage.example.com --agent-id <uuid>      # 执行后交互提示输入 key
+  --center https://vantage.example.com --agent-id <uuid>      # 执行后交互提示输入 key 与 secret
 
 # 形式③：key 文件（长期方案，0600）
-  ... --key-file /etc/vantage/agent.key
+  ... --key-file /etc/vantage/agent.key --secret-file /etc/vantage/agent.secret
 
-# ⛔ 任何形式都不得使用 --key <明文>（ps / /proc/$PID/cmdline 可见）
+# ⛔ 任何形式都不得使用 --key <明文> / --secret <明文>（ps / /proc/$PID/cmdline 可见）
 ```
 
-- ⚠️ 使用形式①后：脚本把 key 写入受限文件即 `unset VANTAGE_KEY` 并清理临时缓冲；建议用户执行 `history -d` 或按提示改用形式②/③。
+- ⚠️ 使用形式①后：脚本把 key/secret 写入受限文件即 `unset VANTAGE_KEY`（与 `VANTAGE_SECRET`）并清理临时缓冲；建议用户执行 `history -d` 或按提示改用形式②/③。
+- ⚠️ `--center` 的取值来自面板配置的 `PUBLIC_ORIGIN`（未配置时按当前请求推导，并会在 `install_hint.warnings` 里提醒）——见 `docs/api.md` §4.4。
 - ✅ 安装完成后，采集项/频率/探活/过滤等**由用户手动编辑 `config.yaml`** 再 `reload`/`restart`（✅ §12.2）。
 - ✅ 上线流程（§12.3）：中心建 Agent → 生成 key（明文仅一次，面板同时给一键命令与 key/secret 两份副本）→ 宿主机执行脚本 → 首次上报成功（面板出现该机 + 首次 IP）→ 按需编辑 `config.yaml` → 配置告警通道。
 - ⛔ 中心**不参与分发、不推送**（§12.4）。

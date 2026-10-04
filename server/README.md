@@ -22,22 +22,28 @@ server/
 │   ├── app.js              Fastify 装配：错误模型 / 请求 ID / 安全响应头 / 路由挂载清单
 │   ├── config/index.js     环境变量加载与校验（快速失败，一次列出全部问题）
 │   ├── db/{pg.js,redis.js} PG / Redis 客户端、批量 PUBLISH、健康检查
-│   ├── middleware/         authAgent（解压+体积+验签）· rateLimit（Lua 固定窗口）
+│   ├── middleware/         authAgent（解压+体积+验签）· authPanel（会话/CSRF）· rateLimit（Lua 固定窗口）
+│   │                       publicView（公开视图总开关）
 │   ├── models/report.js    上行报文 JSON Schema（字段白名单 / 数值范围 / 数组上限）
-│   ├── repositories/       agents · ipTrack · metric · probe · audit（只写 SQL）
+│   ├── repositories/       agents · ipTrack · metric · probe · audit · user（只写 SQL）
 │   ├── services/           ingest（批次编排）· metrics · heartbeat · ipTrack · probe
 │   │                       partition（分区建/删）· downsample（1m/5m 聚合）
 │   │                       retention（保留期分批清理）· cron（调度 + 单实例锁）
+│   │                       offline（离线点名）· status（状态推导，公开/私有共用）
+│   │                       agentAdmin（Agent 与凭证管理）· auth · session · captcha · settings
 │   ├── routes/             health.js（探针）· agent.report.js（✅ M1 上报与心跳）
+│   │                       auth.js（✅ 认证会话）· public.js（✅ 公开状态）· hosts.js（✅ 主机）
+│   │                       agents.js（✅ 添加 Agent / 凭证签发）
 │   └── utils/              crypto · sign · metric · ip · ulid · errors · log · redisKeys
 ├── migrations/             版本化 SQL（只前进不回滚）→ 见 migrations/README.md
 ├── scripts/
 │   ├── migrate.js          迁移运行器（advisory lock + 校验和 + --status）
 │   ├── create-agent.js     Agent 凭证签发/轮换/列表（M2 之前的手工替代品）
+│   ├── create-user.js      首管员创建 / 离线救援（--reset-2fa）
 │   ├── partitions.js       分区运维兜底（--list / --ensure / --drop-expired --dry-run）
 │   ├── run-tests.js        测试入口（进程内加载，规避受限环境的 spawn 限制）
 │   └── init-db.sql         建库与建角色（DBA 执行一次）
-├── test/                   225 个用例，含"真库"结构验证与可选的真机联调
+├── test/                   430+ 个用例，含"真库"结构验证与可选的真机联调
 └── .env.example            全部环境变量说明
 ```
 
@@ -264,5 +270,9 @@ node scripts/partitions.js --drop-expired 15 --dry-run # 只看会删哪些
 | `src/utils/errors.js` | docs/api.md §1.3（含 `nonce_reused` 409 的口径校正） |
 | `src/utils/ip.js` | docs/database.md §5.5、设计 §8（+开放项 M-7） |
 | `src/routes/agent.report.js` | docs/api.md §2.1/§2.2/§2.3/§5.3/§6.1 |
+| `src/services/status.service.js` + `src/routes/{public,hosts}.js` + `src/middleware/publicView.js` | docs/api.md §3.1/§3.2/§4.2、§1.2 ③；`docs/server-status-api.md`（全部决策与取数策略）；落地记录 `docs/api-status.md` §4.6 |
+| `src/utils/time.js` | docs/api.md §1.2 ③（`from`/`to` 的时间格式与范围约束）、§4.3 |
+| `src/routes/agents.js` + `src/services/agentAdmin.service.js` | docs/api.md §4.4（含决策 #37 修订的三条硬约束）、docs/agent.md §6.1/§12.1、docs/database.md §5.1/§5.2（✅ R1） |
+| `src/services/offline.service.js` | 设计 §5.3、`docs/database.md` §8.2（离线判定 + 防抖）、`docs/api-status.md` §4.4 |
 | `migrations/*` | docs/database.md §5 全表 + §8 保留期（✅ R1–R19） |
 | `test/schema.test.js` | docs/database.md §5/§6/§8 的可执行化 |

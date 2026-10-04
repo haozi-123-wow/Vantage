@@ -16,8 +16,11 @@ import cookie from '@fastify/cookie';
 import Fastify from 'fastify';
 
 import { registerAgentReportRoutes } from './routes/agent.report.js';
+import { registerAgentAdminRoutes } from './routes/agents.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerHealthRoutes } from './routes/health.js';
+import { registerHostRoutes } from './routes/hosts.js';
+import { registerPublicRoutes } from './routes/public.js';
 import { buildErrorBody, normalizeError } from './utils/errors.js';
 
 export const SERVICE_NAME = 'vantage-core';
@@ -31,9 +34,17 @@ export const SERVICE_VERSION = '0.8.0';
  *  ✅ M1      POST /api/v1/agent/heartbeat     （共用 Agent 限流桶，§2.2）
  *  ✅ B4/B5   /api/v1/auth/login · me · logout · logout-all · password
  *             （会话/CSRF/登录限流/审计，docs/api.md §4.1、§4.1.1 ⑦；2FA 三件套与恢复码在 B6/B7）
- *  ⏳ M2      /api/public/*                    （免登录只读快照 + 严格限流，§3）
- *  ⏳ M2      /api/v1/hosts/*                  （主机、历史查询、进程 Top，§4.2/§4.3）
- *  ⏳ M3      /api/v1/alerts|channels|silences|settings|users|audit（§4.5–§4.10）
+ *  ✅ M2      GET /api/public/hosts · /api/public/summary
+ *             （免登录只读快照：按 IP 严格限流 + 响应级短 TTL 缓存 + `public_view.enabled` 总开关，§3.2）
+ *  ✅ M2      GET /api/v1/hosts                （主机列表：派生状态 / 快照 / 探活计数，§4.2）
+ *  ✅ M2      GET /api/v1/summary · /api/v1/hosts/{id}[/probes|/ip-history|/processes]
+ *             （面板汇总 + 单机纵深：详情/探活历史/IP 时间线/进程 Top，§4.2）
+ *  ✅ M2      GET /api/public/hosts/{slug}/now · /api/public/probes
+ *             （公开单机展开与探活概览：⛔ 设备名泛化、目标脱敏，§3.2）
+ *  ✅ M3      POST /api/v1/agents              （添加 Agent：签发凭证，明文仅一次，§4.4）
+ *  ⏳ M2      GET /api/v1/hosts/{id}/metrics   （时序查询：档位/上限/响应格式待定稿，见方案 §10）
+ *  ⏳ M3      /api/v1/agents 的其余管理端点（列表/详情/PATCH/rotate/disable|enable/revoke，§4.4）
+ *  ⏳ M3      /api/v1/alert-rules|alert-events|channels|silences|settings|users|audit-logs（§4.5–§4.10）
  *  ⏳ M3      /ws/public · /ws/live            （WebSocket 快照+增量，§5）
  *  ⛔ 永不存在 GET /api/v1/agent/config、/agent/tasks、/agent/command 等下发型端点（§2.3）
  */
@@ -157,6 +168,15 @@ export async function buildApp({ config, logger, db, redis, startupChecks = true
 
   // --- 面板认证（✅ §4.1 B4/B5：登录/me/登出/改密；⛔ 无任何向 Agent 下发的路径）---
   await app.register(registerAuthRoutes);
+
+  // --- 公开只读状态（✅ §3.2：免登录 + 按 IP 严格限流 + 总开关；⛔ 响应零内部标识）---
+  await app.register(registerPublicRoutes);
+
+  // --- 面板主机（✅ §4.2：需登录且必须完整会话三态；⚠️ 本路由会返回 IP，与公开路由严格分离）---
+  await app.register(registerHostRoutes);
+
+  // --- Agent 与凭证管理（✅ §4.4 的第一块：添加 Agent；⛔ 全站唯一返回明文凭证的响应）---
+  await app.register(registerAgentAdminRoutes);
 
   return app;
 }

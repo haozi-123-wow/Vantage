@@ -43,6 +43,13 @@ export const KEY_PREFIX = Object.freeze({
   alertCooldown: 'alert:cooldown:',
   ipRecent: 'ip:recent:',
   snapshotAgent: 'snapshot:agent:',
+  /**
+   * 公开接口的**响应级**缓存（✅ docs/server-status-api.md §2.4 / §7.2）。
+   * ⚠️ 刻意复用 `snapshot:` 语义族而不是新开 `cache:` 前缀：它缓存的就是「当前快照」，
+   *    只是粒度从**每机**（`snapshot:agent:<id>`，至今无写入方）改成了**整个响应**。
+   *    ⛔ 键名是跨模块契约（`docs/database.md` §7）：新增子键必须同步登记到该表。
+   */
+  snapshotPublic: 'snapshot:public:',
   notifyTokenBucket: 'notify:tokenbucket:',
   cronLock: 'cron:lock:',
   settingsCache: 'settings:cache',
@@ -66,7 +73,12 @@ export const TTL_S = Object.freeze({
   batchShort: 60,
   /** Flapping 判定窗口（决策 #39：10 分钟窗口内变化次数） */
   ipRecent: 600,
-  /** 公开「当前快照」缓存（§5.4「带缓存」） */
+  /**
+   * 公开「当前快照」缓存（§5.4「带缓存」）。
+   * ⏳ **暂无写入方**：`/api/public/*` 落地时改用**响应级**缓存
+   *    （`snapshot:public:hosts|summary`，TTL 由 `config.rateLimit.publicCacheTtlS` 决定），
+   *    本键当前的语义与列表端点不匹配，保留给将来的 `/ws/*` 实时扇出复用。
+   */
   snapshotAgent: 15,
   /**
    * ✅ docs/api.md §4.1.1 ④：TOTP 步号防重放。
@@ -133,6 +145,22 @@ export const keys = Object.freeze({
   ipRecent: (agentId) => `${KEY_PREFIX.ipRecent}${agentId}`,
   /** 公开快照缓存 */
   snapshotAgent: (agentId) => `${KEY_PREFIX.snapshotAgent}${agentId}`,
+  /**
+   * 公开列表 / 汇总的**响应体**缓存（TTL 来自 `config.rateLimit.publicCacheTtlS`，
+   * ⛔ 不在这里写死：0 = 关缓存的语义必须由调用方一处决定）。
+   * 值 = 已脱敏的完整响应 JSON（含 `updated_at`），⛔ 绝不缓存含 IP / 内部 UUID 的私有响应。
+   */
+  snapshotPublicHosts: `${KEY_PREFIX.snapshotPublic}hosts`,
+  snapshotPublicSummary: `${KEY_PREFIX.snapshotPublic}summary`,
+  /**
+   * 公开**单机**快照缓存（`/api/public/hosts/{slug}/now`）。
+   * ⚠️ 键里带 slug（公开标识，非机密）⇒ 键数量 ≈ 主机数，**不会**被枚举撑爆：
+   *    ① slug 是 8–12 位、字符集 58 ⇒ 猜中一个的成本 ≈ 58^8；② 只有**存在**的主机才会写缓存
+   *    （404 不缓存）。故无需担心 noeviction 下的键膨胀。
+   */
+  snapshotPublicHostNow: (slug) => `${KEY_PREFIX.snapshotPublic}now:${slug}`,
+  /** 公开探活概览缓存（`/api/public/probes`） */
+  snapshotPublicProbes: `${KEY_PREFIX.snapshotPublic}probes`,
   /** 通道令牌桶（✅ 决策 #23：排队等待、不丢弃） */
   notifyTokenBucket: (channelId) => `${KEY_PREFIX.notifyTokenBucket}${channelId}`,
 

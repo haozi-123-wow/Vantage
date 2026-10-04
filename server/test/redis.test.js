@@ -217,6 +217,8 @@ test('所有键都带隔离前缀，且前缀互不重复（避免跨用途误�
     keys.alertCooldown('rule', 'agent'),
     keys.ipRecent('agent'),
     keys.snapshotAgent('agent'),
+    keys.snapshotPublicHosts,
+    keys.snapshotPublicSummary,
     keys.notifyTokenBucket('channel'),
     keys.cronLock('create_partitions'),
   ]) {

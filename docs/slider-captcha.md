@@ -340,9 +340,9 @@
 
 | 本文内容 | 来源 |
 |---|---|
-| §1 现有防线 | `docs/api.md` §1.4、§4.1、§4.1.1 ⑨；`server/src/middleware/rateLimit.js` |
+| §1 现有防线 | `docs/api.md` §1.4、§4.1；`docs/api-status.md` §3.7（原 `api.md` §4.1.1 ⑨）；`server/src/middleware/rateLimit.js` |
 | §1 内网约束 | `docs/api.md` §1.1（面板与反代同源部署、不引外部资源）；本仓库"依赖越少越好"取向（`docs/agent.md`、`server/src/utils/totp.js` 的自研理由） |
 | §5.3 Redis 键登记要求 | `docs/database.md` §7「键空间集中定义」 |
-| §5.4 一次性与防重放口径 | `docs/api.md` §4.1.1 ④（`totp:used:<uid>` 同款模式） |
+| §5.4 一次性与防重放口径 | `docs/api-status.md` §3.3（`totp:used:<uid>` 同款模式；原 `api.md` §4.1.1 ④） |
 | §5.7 fail-closed 取向 | `docs/api.md` §1.4（Redis 不可用时拒绝服务，⛔ 不做无限流登录） |
 | §6 settings 白名单 | `docs/api.md` §4.10 + `server/src/services/settings.service.js` |

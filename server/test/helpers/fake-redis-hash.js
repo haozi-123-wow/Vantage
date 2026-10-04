@@ -22,6 +22,8 @@ export function createFakeRedisHash({ now = () => Date.now() } = {}) {
   const store = new Map();
   /** 逐条记录已执行命令，便于断言"到底写了哪些键" */
   const commands = [];
+  /** 已"发布"的消息（⚠️ 不投递，只收集） */
+  const published = [];
 
   const alive = (key) => {
     const entry = store.get(key);
@@ -239,6 +241,7 @@ export function createFakeRedisHash({ now = () => Date.now() } = {}) {
       ttl,
       get,
       set,
+      publish,
       eval: evalScript,
     };
     const builder = {};
@@ -262,8 +265,20 @@ export function createFakeRedisHash({ now = () => Date.now() } = {}) {
     return builder;
   }
 
+  /**
+   * 发布（只收集，不做投递）。
+   * ⚠️ 必须有：上报链路的扇出走 `redis.pipeline().publish(...)`（`db/redis.js` 的 `publish()`），
+   *    少了它 pipeline 会在 `for (...)` 里抛 `TypeError: pipeline.publish is not a function` ——
+   *    而那一层被 `ingest.service.js` 的 `catch` 吞成一条 warn，于是**测试照过、扇出其实没被验到**。
+   */
+  const publish = async (channel, payload) => {
+    published.push({ channel, payload });
+    return 1;
+  };
+
   return {
     commands,
+    published,
     has: (key) => alive(key) !== null,
     keys: () => [...store.keys()].filter((key) => alive(key) !== null),
     seedHash,
