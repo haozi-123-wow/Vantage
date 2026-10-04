@@ -79,10 +79,17 @@ function dummyPasswordHash() {
 
 /**
  * 登录失败统一出口：审计 + 抛 401（响应体对三种失败情形**完全一致**）。
+ *
+ * ⚠️ `captchaRequired=true` 时响应里会带 `details.captcha_required`（docs/api.md §4.1）：
+ *    它由 **IP / 提交用户名的失败计数**算出，与"账号是否存在"无关，因此三种失败情形拿到的
+ *    `details` 仍然**完全一致**——防用户名枚举的那条不变量没有被破坏。
+ *    （⛔ 对应的既有断言要按**意图**改写，而不是删掉，见 docs/slider-captcha-selfbuilt.md §5.3）
+ *
  * @param {{ pool: object, logger: object }} deps
- * @param {{ username: string, ip: string|null, actor: string, actorType: 'user'|'system' }} info
+ * @param {{ username: string, ip: string|null, actor: string, actorType: 'user'|'system',
+ *           captchaRequired?: boolean }} info
  */
-async function failLogin({ pool, logger }, { username, ip, actor, actorType }) {
+async function failLogin({ pool, logger }, { username, ip, actor, actorType, captchaRequired = false }) {
   await insertAuditLog(
     pool,
     {
@@ -97,7 +104,10 @@ async function failLogin({ pool, logger }, { username, ip, actor, actorType }) {
     },
     logger,
   );
-  throw new AppError('invalid_credentials');
+  throw new AppError(
+    'invalid_credentials',
+    captchaRequired ? { details: { captcha_required: true } } : undefined,
+  );
 }
 
 /**
@@ -121,9 +131,12 @@ async function claimTotpStep(redis, userId, step) {
 
 /**
  * 创建认证服务。
- * @param {{ pool: object, redis: import('ioredis').Redis, config: object, logger: object }} deps
+ * @param {{ pool: object, redis: import('ioredis').Redis, config: object, logger: object,
+ *           captcha: object }} deps
+ *   `captcha` = `services/captcha.service.js` 的实例（滑动验证码闸门）。由路由层构造后注入，
+ *   ⛔ 不在本模块内 new：两个服务必须共用同一份 Redis 与设置缓存口径。
  */
-export function createAuthService({ pool, redis, config, logger }) {
+export function createAuthService({ pool, redis, config, logger, captcha }) {
   /** @param {object} entry insertAuditLog 的入参 */
   const audit = (entry) => insertAuditLog(pool, entry, logger);
 
@@ -144,14 +157,28 @@ export function createAuthService({ pool, redis, config, logger }) {
     /**
      * 登录第一步（密码）。
      *
-     * @param {{ username: string, password: string, ip: string|null, ua: string|null }} input
+     * 检查顺序（⛔ 不可调换，docs/slider-captcha-selfbuilt.md §2.3）：
+     *   ① 登录限流（路由层 preHandler）→ ② 读人机验证策略与失败计数 → ③ 校验 `captcha_token`
+     *   → ④ 查库 + 验密码 → ⑤ 失败则两个计数器 +1 → ⑥ 成功则消费 token。
+     * 🔑 ③ 必须在 ④ 之前：否则攻击者不必通过人机验证就能让服务端每次跑满 19MiB 的 Argon2，
+     *    等于白送一个 DoS 放大器。
+     *
+     * @param {{ username: string, password: string, ip: string|null, ua: string|null,
+     *           captchaToken?: string|null }} input
      * @returns {Promise<{ sid: string, csrf: string, totpRequired: boolean, user?: object, roles?: string[] }>}
      *   `totpRequired=true` 时**不带** user/roles（§4.1：此时其余接口一律 403，给用户资料没有意义）；
      *   `totpRequired=false` 且账号未绑定 2FA 时即为完整登录（若 `require_2fa=true`，会话处于受限态，
      *   由 `GET /me` 的 403 `totp_setup_required` 引导前端去绑定页 —— §4.1.1 ⑧ D2）。
      * @throws AppError('invalid_credentials') 三种失败情形同码同文（见 failLogin）
+     * @throws AppError('captcha_required') 策略要求人机验证但未带 `captcha_token`（400）
+     * @throws AppError('captcha_invalid') token 无效 / 已过期 / 已消费 / 换了 IP（400）
      */
-    async login({ username, password, ip, ua }) {
+    async login({ username, password, ip, ua, captchaToken = null }) {
+      // ③ 人机验证闸门（⛔ 不查库：登录路径的等时校验不允许这里引入"账号是否存在"的差异）
+      if (await captcha.requireForLogin({ ip, username })) {
+        await captcha.assertLoginToken({ ip, captchaToken });
+      }
+
       const user = await findUserForAuth(pool, username);
 
       let passwordOk = false;
@@ -163,11 +190,15 @@ export function createAuthService({ pool, redis, config, logger }) {
       }
 
       if (!user || !passwordOk || user.status !== 'active') {
+        // ⑤ 失败计数（IP + 账号两个维度）：⛔ 必须先 INCR 再抛错——否则"错一次"不会让下一次
+        //    登录要求人机验证；返回值告诉我们这次要不要在响应里提示前端"当场弹滑块"。
+        const { required } = await captcha.bumpLoginFailure({ ip, username });
         await failLogin({ pool, logger }, {
           username,
           ip,
           actor: user?.id ?? 'system',
           actorType: user ? 'user' : 'system',
+          captchaRequired: required,
         });
       }
 
@@ -194,6 +225,10 @@ export function createAuthService({ pool, redis, config, logger }) {
       // ⚠️ 先建会话再记 last_login：若 Redis 挂了，登录在会话创建处失败，
       //    此时**不该**把 last_login_* 更新成"成功登录"的样子（审计与排障都要靠这两列）。
       await touchLogin(pool, user.id, { ip, method: 'password' });
+
+      // ⑥ 登录成功才消费一次性人机验证凭证（⛔ 失败不消费：见 captcha.service.js 文件头第 4 条）
+      const captchaUsed = await captcha.consumeLoginToken({ captchaToken });
+
       await audit({
         actor: user.id,
         actorType: 'user',
@@ -204,6 +239,8 @@ export function createAuthService({ pool, redis, config, logger }) {
           totp_required: needsTotp,
           setup_required: setupRequired,
           sessions_evicted: evicted.length,
+          // ✅ docs/api.md §4.1：用过人机验证不单独记一条审计，挂在登录这条上（避免噪声）
+          captcha_used: captchaUsed,
         },
       });
 

@@ -82,9 +82,28 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  /** 第一步：密码。返回是否需要第二步验证码 */
-  async function login(username: string, password: string): Promise<{ totpRequired: boolean }> {
-    const result = await authApi.login({ username, password })
+  /**
+   * 第一步：密码。返回是否需要第二步验证码。
+   *
+   * `captchaToken` 为人机验证（滑块）通过后拿到的一次性凭证（docs/slider-captcha-selfbuilt.md §5.3）：
+   * - 服务端只在「失败计数超阈」时要求它；不需要时传 `undefined` 即可（字段本身是可选）；
+   * - ⛔ 不把它存进 store / localStorage —— 它是一次性短期凭证，只应在提交那一瞬间出现；
+   * - 由调用方（`Login.vue`）在收到 401 `details.captcha_required` / 400 `captcha_required` 后取得并重提。
+   */
+  async function login(
+    username: string,
+    password: string,
+    captchaToken?: string,
+  ): Promise<{ totpRequired: boolean }> {
+    // 按需构造 body：服务端 schema 是 additionalProperties:false，⛔ 不要为了"统一"而永远带上
+    // `captcha_token`（无论是 undefined 还是空串），否则一旦服务端把空串当"无效 token"，正常登录就会 400。
+    const body: { username: string; password: string; captcha_token?: string } = {
+      username,
+      password,
+    }
+    if (captchaToken) body.captcha_token = captchaToken
+
+    const result = await authApi.login(body)
     csrf.value = result.csrf ?? null
 
     if (result.totp_required) {
@@ -110,14 +129,26 @@ export const useAuthStore = defineStore('auth', () => {
     return result.remaining_recovery_codes
   }
 
+  /**
+   * 登出当前会话。
+   *
+   * ⚠️ 这里**刻意吞掉服务端登出失败**：`POST /auth/logout` 是写请求，而受限态（`setup_required`）
+   *    下刷新页面后前端手上没有 csrf（`me` 返回 403，见 TwoFactorPanel 的说明），此时请求必定失败。
+   *    但"登出"对用户的可见结果就是本地态清干净 —— 所以无论服务端成功与否都执行 `clear()`，
+   *    且不把异常抛给调用方（否则调用方后面的 `router.push` 会被跳过，按钮点了像没反应）。
+   *    服务端会话由 TTL（滑动 30min / 绝对 24h）与并发上限自然收敛。
+   */
   async function logout(): Promise<void> {
     try {
       await authApi.logout()
+    } catch {
+      // 见上：本地登出优先，服务端会话走 TTL
     } finally {
       clear()
     }
   }
 
+  /** 全部下线：失败必须让调用方知道（"以为踢干净了"是安全问题），⛔ 不吞异常 */
   async function logoutAll(): Promise<void> {
     try {
       await authApi.logoutAll()

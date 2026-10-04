@@ -2,8 +2,10 @@
  * 路由与守卫（docs/frontend.md §3）。
  *
  * 三条必须遵守的规则：
- * - 公开域 = 免登录路由（`/`、`/status`、`/login`）：进守卫时先给 api 层打标记，
+ * - 公开域 = 免登录**只读**路由（`/`、`/status`）：进守卫时先给 api 层打标记，
  *   私有客户端在公开域被调用会直接抛错（网络层硬隔离，便于测试）；
+ *   ⚠️ `/login` 虽也免登录，但按 docs/frontend.md §4.2 必须调用私有客户端的登录/人机验证端点，
+ *      故**不**打该标记（取舍理由见下面 `markPublicDomain` 处的注释）；
  * - 受保护路由：`meta.requiresAuth`，进入前若未确认登录态先调 `GET /api/v1/auth/me`，
  *   失败 → `/login?redirect=<当前路径>`；
  * - `meta.role` 控制需管理员的页面：**越权显示 403 提示页**，⛔ 不静默重定向。
@@ -50,6 +52,14 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, titleKey: 'view.alerts.title' },
   },
   {
+    // 自助类（2FA / 我的会话 / SSO 绑定状态）：⛔ 不设 `role`，任何登录用户都要能进 ——
+    // 否则普通用户在完整态下永远无法自助开启 2FA（服务端对 2fa/* 同样没有 admin 门槛）
+    path: '/account',
+    name: 'account',
+    component: () => import('@/views/Account.vue'),
+    meta: { requiresAuth: true, titleKey: 'view.account.title' },
+  },
+  {
     path: '/settings',
     name: 'settings',
     component: () => import('@/views/Settings.vue'),
@@ -78,7 +88,13 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
   const isPublicDomain = to.matched.some((record) => record.meta.public === true)
-  markPublicDomain(isPublicDomain)
+  // ⚠️ 取舍（实现 S3 时发现，两份文档在这里互相矛盾，已按"能工作"的那份实现）：
+  //    docs/frontend.md §3 把 `/login` 也算作公开域（只允许调 `/api/public/*`），但 §4.2 又要求登录页
+  //    调 `POST /api/v1/auth/login`；人机验证（滑块）同样要走私有客户端的 `/auth/captcha/*`
+  //    （docs/slider-captcha-selfbuilt.md §7.1/§7.3）。若给 `/login` 打上公开域标记，`call()` 会直接抛
+  //    `private_api_in_public_domain`，登录页根本没法工作 —— 所以公开域标记只覆盖「免登录**只读**」页
+  //    （`/`、`/status`）。⛔ 这只解除网络层断言，`/login` 仍不得调用任何需要会话的私有接口。
+  markPublicDomain(isPublicDomain && to.name !== 'login')
 
   if (isPublicDomain) {
     // 已登录用户访问 /login → 直接回 redirect 或 /hosts
@@ -92,8 +108,8 @@ router.beforeEach(async (to) => {
   if (auth.status === 'unknown') await auth.bootstrap()
 
   if (auth.status === 'totp_setup_required') {
-    // 受限态：只放行 2FA 绑定所在的设置页（docs/api.md §4.1）
-    return to.name === 'settings' ? true : { name: 'settings' }
+    // 受限态：只放行 2FA 绑定所在的**我的账号**页（自助类；docs/api.md §4.1.0 三态矩阵）
+    return to.name === 'account' ? true : { name: 'account' }
   }
 
   if (!auth.isAuthenticated) {

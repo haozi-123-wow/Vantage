@@ -302,6 +302,75 @@ export function loadConfig(env = process.env, options = {}) {
   }
   const cookieName = str('COOKIE_NAME', { def: 'vantage_sid', pattern: /^[A-Za-z0-9_-]+$/, hint: '只允许字母数字与 - _' });
 
+  // --- 人机验证提供方（✅ C12 已定 = G1-a；docs/geetest-captcha.md §8.1）--------------
+  // ⛔ captchaId 是**公开**值（会下发给前端）；captchaKey 是**机密**（只用来算 sign_token）。
+  const geetestCaptchaId = str('GEETEST_CAPTCHA_ID', {
+    pattern: /^[A-Za-z0-9_-]{16,64}$/,
+    hint: '极验后台的 captcha_id（当前形如 32 位十六进制）',
+  });
+  const geetestCaptchaKey = str('GEETEST_CAPTCHA_KEY', {
+    pattern: /^[A-Za-z0-9_-]{16,64}$/,
+    hint: '极验后台的 captcha_key（当前形如 32 位十六进制；⛔ 机密，勿提交仓库）',
+  });
+  const geetestConfigured = Boolean(geetestCaptchaId && geetestCaptchaKey);
+
+  /**
+   * 提供方解析（⚠️ 这是对 C12「极验为默认」的一处**受控细化**，理由必须写在代码里）：
+   *
+   *  · **未设置 → 自动推断**：配了极验密钥就用极验，否则用自建滑块。
+   *    为什么不直接写死默认 `geetest`：那会让**所有既有部署升级后因缺密钥启动失败**，
+   *    而"没有极验可用"时回退到自建滑块**严格优于**整个服务起不来 —— 回退后依然有人机验证。
+   *    ✅ 一旦填了密钥（用极验的必要前提），默认就是极验，与 C12 的意图一致。
+   *  · **显式声明 `geetest` 却缺密钥 → 启动即失败**。
+   *    ⛔ 绝不允许"声明用极验但没给密钥"变成一个跑得起来、运行时静默放行的进程
+   *    （前车之鉴见 docs/geetest-captcha.md §9.4 教训一）。
+   *  · 取值与 `services/captcha/providers/*` 的 provider 名**逐字一致**（改一处必须改两处）。
+   */
+  const captchaProviderExplicit = oneOf('CAPTCHA_PROVIDER', ['geetest', 'selfbuilt', 'none'], { def: undefined });
+  if (captchaProviderExplicit === 'geetest' && !geetestConfigured) {
+    errors.push(
+      'CAPTCHA_PROVIDER=geetest 时必须同时配置 GEETEST_CAPTCHA_ID 与 GEETEST_CAPTCHA_KEY' +
+        '（缺密钥时无法校验，故此处拒绝启动；不打算用极验请显式改为 selfbuilt 或 none）',
+    );
+  }
+  const captchaProvider = captchaProviderExplicit ?? (geetestConfigured ? 'geetest' : 'selfbuilt');
+
+  const geetest = {
+    captchaId: geetestCaptchaId ?? null,
+    captchaKey: geetestCaptchaKey ?? null,
+    /** ⛔ 只写域名：协议固定为 https、路径由 `utils/geetest.js` 拼（备用域名见变更方案 §8.5） */
+    apiServer: str('GEETEST_API_SERVER', {
+      def: 'gcaptcha4.geetest.com',
+      pattern: /^[A-Za-z0-9.-]+$/,
+      hint: '只写域名，不含协议与路径',
+    }),
+    /**
+     * 二次校验超时（毫秒）。
+     * ⚠️ 官方 demo 用 5000；这里默认 3000 —— 闸门在验密**之前**，超时直接体现为"点登录卡住"，
+     *    宁可更早放弃（放弃后的行为由 failMode 决定）。
+     */
+    timeoutMs: int('GEETEST_TIMEOUT_MS', { def: 3000, min: 500, max: 10000 }),
+    /**
+     * 极验不可达时：`open` = **放行**（✅ C13 已定，与极验官方容灾口径一致）；
+     * `closed` = 拒绝（503 `captcha_unavailable`）。
+     * ⚠️ 选 `open` 的连带义务见 docs/geetest-captcha.md §9.3：审计 + error 日志 + 超时不重试，
+     *    否则这一层会在没人察觉的情况下静默消失。
+     */
+    failMode: oneOf('GEETEST_FAIL_MODE', ['open', 'closed'], { def: 'open' }),
+    /**
+     * 官方按钮的展现形式（✅ C16 已定 = 用极验的**官方按钮**）：
+     * `popup` = 按钮 + 带遮罩的验证弹窗；`float` = 按钮 + 浮动验证层。
+     * ⛔ 不接受 `bind`（它根本不渲染按钮，与已定需求相反）。
+     */
+    product: oneOf('GEETEST_PRODUCT', ['popup', 'float'], { def: 'popup' }),
+    /** 验证窗内文案的语言（由极验自己渲染，⛔ 不受本站 i18n 控制；图片文字不随语言变） */
+    language: oneOf(
+      'GEETEST_LANGUAGE',
+      ['zho', 'eng', 'zho-tw', 'zho-hk', 'udm', 'jpn', 'ind', 'kor', 'rus', 'ara', 'spa', 'pon', 'por', 'fra', 'deu'],
+      { def: 'zho' },
+    ),
+  };
+
   const security = {
     secretKey,
     settingsCacheTtlS: int('SETTINGS_CACHE_TTL_S', { def: 30, min: 0, max: 3600 }),
@@ -321,6 +390,20 @@ export function loadConfig(env = process.env, options = {}) {
       cookieSecure: bool('COOKIE_SECURE', { def: isProd }),
       cookieSameSite: 'lax',
     },
+    /**
+     * 人机验证（✅ docs/geetest-captcha.md §8.1；自建方案 docs/slider-captcha-selfbuilt.md §8.1）。
+     * ⛔ 出场阈值（是否启用 / 失败几次后要求）**不在这里**：它们是面板可改的运行时设置（settings 表），
+     *    只有"用哪个提供方、题目怎么出、判多宽、给几次机会、超时多久"这类工程常量才走 env（改了要重启）。
+     */
+    captcha: {
+      /** `geetest` / `selfbuilt` / `none`（未设置时自动推断，见上方 captchaProvider 的注释） */
+      provider: captchaProvider,
+      ttlS: int('CAPTCHA_TTL_S', { def: 120, min: 30, max: 600 }),
+      tolerancePx: int('CAPTCHA_TOLERANCE_PX', { def: 5, min: 2, max: 20 }),
+      maxAttempts: int('CAPTCHA_MAX_ATTEMPTS', { def: 3, min: 1, max: 10 }),
+      /** 极验参数（仅在 provider=geetest 时被读取；凭据缺失时字段为 null） */
+      geetest,
+    },
   };
 
   // --- 限流（✅ 决策 #23；数值为 docs/api.md §1.4 建议值）--------------------
@@ -329,6 +412,8 @@ export function loadConfig(env = process.env, options = {}) {
     publicPerMinute: int('RATELIMIT_PUBLIC_PER_MINUTE', { def: 60, min: 1 }),
     loginPerWindow: int('RATELIMIT_LOGIN_PER_WINDOW', { def: 10, min: 1 }),
     loginWindowS: int('RATELIMIT_LOGIN_WINDOW_S', { def: 300, min: 30 }),
+    /** 滑块取题/验题按 IP（✅ docs/api.md §1.4：独立桶，比登录桶宽松——"换一张图"是正常操作） */
+    captchaPerMinute: int('RATELIMIT_CAPTCHA_PER_MINUTE', { def: 30, min: 1 }),
     wsConcurrentPerIp: int('RATELIMIT_WS_CONCURRENT_PER_IP', { def: 3, min: 1 }),
   };
 
@@ -416,7 +501,11 @@ export function loadConfig(env = process.env, options = {}) {
     log: Object.freeze(log),
     db: Object.freeze(db),
     redis: Object.freeze(redis),
-    security: Object.freeze({ ...security, session: Object.freeze(security.session) }),
+    security: Object.freeze({
+      ...security,
+      session: Object.freeze(security.session),
+      captcha: Object.freeze({ ...security.captcha, geetest: Object.freeze(security.captcha.geetest) }),
+    }),
     rateLimit: Object.freeze(rateLimit),
     retention: Object.freeze(retention),
     heartbeat: Object.freeze(heartbeat),

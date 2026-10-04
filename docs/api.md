@@ -27,6 +27,8 @@
 | ⏳ 未实现 | **契约已定稿（或本轮定稿），但代码尚未落地**——当前调用会命中 404 `not_found` |
 | ⛔ | 禁止项（违反单向宗旨即视为重大缺陷） |
 
+> 文中出现的 **S1–S4** = §4.1.1 ⑦ 里「登录人机验证（滑块验证码）」的分块；实施规范见 `docs/slider-captcha-selfbuilt.md`，选型调研见 `docs/slider-captcha.md`。
+
 **实现进度速览（2026-10-03，随落地更新；逐端点状态见对应章节）**
 
 | 模块 | 状态 | 落点 |
@@ -35,6 +37,8 @@
 | Agent 上报 / 心跳（HMAC 签名） | ✅ 已实现（M1） | §2 |
 | 面板账号：登录 / me / 登出 / 改密（会话 + CSRF + 审计） | ✅ 已实现 | §4.1（落地记录 §4.1.1 ⑧） |
 | 面板 2FA（绑定 / 解绑 / 第二步 / 恢复码） | ✅ 已实现（B6/B7） | §4.1（落地记录 §4.1.1 ⑤⑦⑧） |
+| 登录人机验证（滑块，**自建**） | ✅ 已落地（S1–S3；⏳ 待跑 `npm test` 验收） | §4.1；实施规范见 `docs/slider-captcha-selfbuilt.md` |
+| 登录人机验证（**极验 v4**，官方按钮） | ✅ **后端（S5–S7）与前端（S8）均已落地**；⏳ 待跑 `npm test` 与真机联调 | §4.1（**双提供方分支已并入本文**）；变更方案见 `docs/geetest-captcha.md`（前端落地记录 §16.7） |
 | 首管员 / 离线救援 CLI | ✅ 已实现 | §4.1.1 ⑥ |
 | 公开只读快照（`/api/public/*`） | ⏳ 未实现（M2） | §3 |
 | 主机 / 历史 / 进程 Top | ⏳ 未实现（M2） | §4.2–§4.4 |
@@ -59,7 +63,9 @@
 | GET | `/api/public/hosts` | 公开主机列表（slug） | 公开 | ⏳ M2 | §3.3 |
 | GET | `/api/public/hosts/{slug}/now` | 单机当前快照 | 公开 | ⏳ M2 | §3.4 |
 | GET | `/api/public/probes` | 探活当前概览 | 公开 | ⏳ M2 | §3.5 |
-| POST | `/api/v1/auth/login` | 登录第一步（密码） | 公开 | ✅ B4 | §4.1 |
+| POST | `/api/v1/auth/login` | 登录第一步（密码；密码错后要求人机验证） | 公开 | ✅ B4 + S | §4.1 |
+| POST | `/api/v1/auth/captcha/challenge` | 取滑块验证题（人机验证） | 公开 | ✅ S | §4.1 |
+| POST | `/api/v1/auth/captcha/verify` | 校验滑块并发放一次性 `captcha_token` | 公开 | ✅ S | §4.1 |
 | POST | `/api/v1/auth/2fa/verify` | 登录第二步（TOTP 6 位） | Cookie | ✅ B7 | §4.1 |
 | GET | `/api/v1/auth/me` | 恢复登录态 + 取 CSRF | Cookie | ✅ B4 | §4.1 |
 | POST | `/api/v1/auth/logout` | 登出当前会话 | Cookie | ✅ B4 | §4.1 |
@@ -133,7 +139,7 @@
 
 - **触发范围**：`POST` / `PATCH` / `DELETE`（`GET`/`HEAD`/`OPTIONS` 不校验）。
 - **取值**：登录响应与 `GET /auth/me` 的 `csrf` 字段 → 放进请求头 `X-CSRF-Token`。
-- **唯一豁免**：`POST /api/v1/auth/login`（此时尚无会话，拿不到 token）。
+- **豁免范围**：`POST /api/v1/auth/login` 与两个 `POST /api/v1/auth/captcha/*`（取题 / 验题）——它们都在**会话建立之前**运行，浏览器没有可借的环境权限。⛔ 这不是"跳过校验"，而是"没有可校验的对象"：实现上 `requireCsrf` 在**无会话时直接放行**（§4.1.1 ①）。⛔ 除这三者外，任何写请求都不得豁免。
 - **失败**：403 `csrf_invalid`，且**不销毁会话**（前端可重取 `me` 后重试）。
 - ⚠️ **`sid` 轮换（过 2FA / 改密 / 恢复码登录）后 `csrf` 不变**——前端无需换 token（✅ 决策 #32 的配套取舍，理由见 §4.1.1 ①）。
 
@@ -197,6 +203,9 @@
 | 400 | `unknown_setting` | `PATCH /settings` 传了白名单外的 key（§4.10） |
 | 400 | `invalid_setting_value` | 设置项的值类型不符合该 key 的定义（§4.10） |
 | 400 | `invalid_totp` | 2FA 验证码/恢复码不正确、已用过或同一步号重放（§4.1） |
+| 400 | `captcha_required` | 已触发人机验证策略（同 IP / 同账号失败计数超阈）但请求未带 `captcha_token`（§4.1，S 系列已落地） |
+| 400 | `captcha_invalid` | 人机验证未通过 / 题目已过期或已作废 / token 无效或已消费；`details.reason` 见 §4.1（自建 S 系列 + 极验 S7 均已落地） |
+| 503 | `captcha_unavailable` | **极验不可达且 `GEETEST_FAIL_MODE=closed`**（S7 已落地）。⚠️ 默认 `open` 时此码不出现（改为放行 + 审计 `auth.captcha_unavailable`）；⛔ 5xx 的 message 会被折叠成通用文案，前端**必须按 `error.code` 匹配**（S7 已落地） |
 | 401 | `signature_invalid` | Agent HMAC 不匹配，或 `X-Agent-Key` 与 `agent_key_hash` 不符 |
 | 401 | `timestamp_skew` | Agent 时间戳超出允许窗口（> 5min 硬上限时任何模式都拒） |
 | 401 | `agent_unknown_or_disabled` | Agent 不存在 / 已吊销 / 已禁用 |
@@ -225,6 +234,7 @@
 | 面板公开接口 | `ratelimit:public:<ip>` | 60 次/分钟 | 429 |
 | 公开 WS 连接 | `ratelimit:ws:<ip>` | 并发连接数上限（如 3）+ 连接建立速率 | 拒绝握手 |
 | 登录 | `ratelimit:login:<ip>` | 如 10 次/5 分钟，失败递增 | 429（不泄露账号是否存在）。✅ 已生效；✅ `/auth/2fa/verify` 与 `/auth/2fa/recovery/verify` **复用同一桶**（防 6 位码暴力枚举，见 §4.1.1） |
+| 滑块取题 / 验题 | `ratelimit:captcha:<ip>` | 30 次/分钟（比登录桶宽松——"换一张图"是正常操作） | 429。⛔ 与登录桶**独立**（否则换图会消耗登录额度）（S 系列已落地） |
 | 通知发送 | `notify:tokenbucket:<channel_id>` | 每通道独立令牌桶（✅ #23） | 排队等待，不丢弃 |
 
 响应头（➕ 建议）：`X-RateLimit-Limit`、`X-RateLimit-Remaining`、`X-RateLimit-Reset`、`Retry-After`。
@@ -484,9 +494,9 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 
 ## 4. 面板私有 API（`/api/v1/*`，需登录）
 
-### 4.1 认证与会话（11 个端点，✅ 全部已实现）
+### 4.1 认证与会话（13 个端点，✅ 全部已落地）
 
-**本节 11 个端点全部已落地**（B4/B5 会话与改密、B6/B7 2FA）。内部机制（Redis 键、三态矩阵、防重放、待拍板项）见 §4.1.1。
+**本节 13 个端点全部已落地**（B4/B5 会话与改密、B6/B7 2FA、S 系列人机验证）；⏳ 待 Owner 跑 `npm test` 验收（人机验证的集成用例在 `server/test/auth.captcha.test.js`）。内部机制（Redis 键、三态矩阵、防重放、待拍板项）见 §4.1.1。
 
 #### 4.1.0 本节通用约定
 
@@ -495,8 +505,9 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 | Cookie | 名 `vantage_sid`（可配），仅存不透明 256-bit 随机 `sid`；`HttpOnly + SameSite=Lax + Path=/ + Max-Age=绝对 TTL`，`Secure` 由 `COOKIE_SECURE` 决定（可选 `__Host-` 前缀）。⛔ Cookie 与响应体里**不得**出现用户资料/角色之外的敏感信息 |
 | 会话状态（Redis `session:<sid>`） | `{ user_id, roles, totp_ok, setup_required, created_at, last_seen, ip, ua, csrf }`；`roles` 恒为 `["admin"]` 或 `["user"]` 单元素数组（保持数组形态便于将来扩多角色） |
 | 生命周期 | 滑动 30min（每次命中续期）+ **绝对 24h**（自 `created_at` 起算，续期不影响）；同账号并发上限 3（超限**踢最旧**，新建的那个永不参与淘汰）；IP/UA **只记录不强制校验** |
-| CSRF | 本节所有写请求都要 `X-CSRF-Token`，**唯一豁免是 `login`**（详见 §1.2 ②） |
-| 登录失败 | 统一 401 `invalid_credentials`（**不区分**账号不存在 / 密码错 / 已禁用），且计入 `ratelimit:login:<ip>` |
+| CSRF | 本节所有写请求都要 `X-CSRF-Token`；**豁免仅限会话建立前的三个端点**（`login` + 两个 `captcha/*`，详见 §1.2 ②） |
+| 登录失败 | 统一 401 `invalid_credentials`（**不区分**账号不存在 / 密码错 / 已禁用），且计入 `ratelimit:login:<ip>`；同时 INCR 两个失败计数器并在响应里带 `captcha_required` 提示（S） |
+| 人机验证 | **首次登录不要求**；一旦出现密码错误，同 IP / 同账号失败计数 ≥ `security.login_captcha.after_failures`（默认 1）→ 后续登录必须携带 `captcha_token`。⚠️ 与三态矩阵**正交**：它只决定"这次登录请求能不能进入验密环节"，⛔ 不改变 `full`/`totp_pending`/`setup_required` 的判定。✅ **默认提供方已是极验 v4（S7 已落地）**，自建滑块保留为可选 provider（`CAPTCHA_PROVIDER=selfbuilt`）。⚠️ 两个提供方在**本表**上的差异只有两处：① `captcha/challenge` 的响应体（自建回两张 SVG；极验回 `provider`+`captcha_id`+`product`+`language`）；② `captcha/verify` 的**请求体**与 `details.reason` 枚举。⛔ 登录端点的请求/响应**一个字都不改**（§4.1 两个端点有逐字段对照） |
 
 **会话三态与各端点的可达性**（✅ 与代码一致；判定规则见 §4.1.1 ②）：
 
@@ -514,6 +525,7 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 | `logout` / `logout-all` | ✅ | ✅ | ✅（⛔ 不能把人锁死在面板里） |
 
 > ✅ 强制策略：`security.require_2fa=true` 时，未绑定 TOTP 的账号登录后进入 `setup_required` 受限态，只放行 `me` / `2fa/setup` / `2fa/enable` / `logout*`，其余一律 403 `totp_setup_required`；⛔ 不允许跳过。
+> ⚠️ 上表**不含**两个 `captcha/*` 端点：它们在**会话建立之前**运行，与会话状态无关（⛔ 不受三态矩阵约束，见 §4.1）。
 
 ---
 
@@ -521,8 +533,9 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 
 | 项 | 值 |
 |---|---|
-| 认证 | 无（本节唯一豁免 CSRF 的写请求） |
+| 认证 | 无（会话建立前的端点，CSRF 天然放行） |
 | 限流 | `ratelimit:login:<ip>`，10 次 / 300s（**成功与失败都计数**） |
+| 人机验证 | 密码错后要求 `captcha_token`（判定见 §4.1.0，S） |
 | 审计 | 成功 `auth.login`；失败 `auth.login_failed`（`detail.reason` 恒为 `invalid_credentials`） |
 
 **请求体**
@@ -531,6 +544,7 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 |---|---|---|---|
 | `username` | string | ✅ | 1–128；**大小写不敏感**（按 `lower(username)` 匹配）；响应回显库内原始写法 |
 | `password` | string | ✅ | 1–128 |
+| `captcha_token` | string | ➕ | ≤128；⛔ 仅在服务端要求时必需（见下）；来自 `POST /auth/captcha/verify`（S） |
 
 **成功 200**（同时下发 `Set-Cookie: vantage_sid=<sid>`）
 
@@ -564,12 +578,110 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 { "csrf": "…", "totp_required": true }
 ```
 
-**错误**：401 `invalid_credentials`（三种失败同码同文**同耗时**）｜400 `schema_invalid`（缺字段 / 超长）｜429 `rate_limited`（带 `Retry-After`）
+**错误**：401 `invalid_credentials`（三种失败同码同文**同耗时**；密码错后其 `details.captcha_required` 为 `true`，S）｜400 `schema_invalid`（缺字段 / 超长）｜400 `captcha_required`（策略要求滑块但缺 `captcha_token`，S）｜400 `captcha_invalid`（token 无效 / 已过期 / 已消费，S）｜429 `rate_limited`（带 `Retry-After`）
 
 **备注**
 
 - **等时校验**：账号不存在（或 SSO-only 无本地密码）时也对固定假哈希跑一次完整 Argon2——响应体与耗时都不可区分（防用户名枚举）。
+  ⚠️ 加滑块后此不变量**必须保持**：是否要求滑块的判定只依赖 **IP / 提交用户名的失败计数**与设置项，⛔ **不查库**，因此不会引入新的计时侧信道（S）。
 - 登录顺带整理 `user_sessions:<uid>`（清僵尸成员 + 超限踢最旧）；`last_login_at/ip/method` 在**会话建好之后**才写（⛔ Redis 挂了不能留下"成功登录"的痕迹）。
+- ⛔ **校验顺序不可调换**（S）：**先卡滑块、后验密码**。若反过来，攻击者不必通过人机验证就能让服务端每次跑满 19MiB 的 Argon2，等于白送一个 DoS 放大器。
+- 滑块相关细节（失败计数器、token 绑定与消费时机、`details.reason` 枚举）见 `docs/slider-captcha-selfbuilt.md` §2/§5/§6.4。
+
+#### `POST /api/v1/auth/captcha/challenge` — 取验证入口配置 ✅ 已实现（自建 S；极验分支 S7）
+
+> 📌 **响应形状按提供方分支**（`CAPTCHA_PROVIDER`，启动时定死，见 §4.1.0）。两个分支都带 `provider` 字段供前端选组件 —— 但⛔ **它都不是安全边界**：真正的判定只在 `captcha/verify`。
+
+| 项 | 值 |
+|---|---|
+| 认证 / CSRF | 无（会话建立前；与会话无关，理由同 `login`，见 §1.2 ②） |
+| 限流 | `ratelimit:captcha:<ip>`，30 次 / 分钟（**独立桶**，见 §1.4） |
+| 开关 | 满足任一即 **404 `not_found`**：`security.login_captcha.enabled=false`、提供方凭据未配置、**外部服务处于熔断窗口且 `GEETEST_FAIL_MODE=open`**（⛔ 不用 403：不暴露"存在但被关"） |
+| 审计 | ⛔ 不记（否则"取题"噪声会淹没审计表） |
+
+**请求**：无 body。
+
+**成功 200（`provider=selfbuilt`）**
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `provider` | string | 恒为 `selfbuilt` |
+| `captcha_id` | string | 题目标识（≥16 字节随机，base64url）；Redis `captcha:<id>`，TTL 120s |
+| `bg_svg` | string | 背景图（含缺口）的 **SVG 文本**，前端内联渲染 |
+| `piece_svg` | string | 拼图块的 **SVG 文本**（用户拖动它） |
+| `width` / `height` | number | **逻辑**画布尺寸；前端可等比缩放显示，但提交的坐标必须是逻辑坐标 |
+| `expires_in` | number | 秒（默认 120） |
+
+⛔ 响应中**不得**出现缺口坐标、容差、失败次数上限（`docs/slider-captcha-selfbuilt.md` §6.1 有逐条"不泄露答案的写法"）。
+
+**成功 200（`provider=geetest`）**
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `provider` | string | 恒为 `geetest` |
+| `captcha_id` | string | 极验 captcha_id（**公开**值，前端 `initGeetest4` 要用）。⛔ `captcha_key` 永不下发 |
+| `product` | string | `popup`（默认：官方按钮 + 带遮罩的验证弹窗）或 `float` |
+| `language` | string | 验证窗语言（`zho`/`eng`/…；由极验渲染，⛔ 不受本站 i18n 控制） |
+
+⚠️ 极验分支**没有 `expires_in`**：题目与答案由极验云端管理，服务端唯一能承诺的 TTL 是验题后自己发的一次性凭证（出现在 `verify` 的响应里）。
+⚠️ 极验分支也**没有 `bg_svg`/`piece_svg`**：出题是极验的事。
+
+**错误**：404 `not_found`（关闭 / 未配置 / 熔断）｜429 `rate_limited`｜503 `upstream_unavailable`（Redis 不可用，fail-closed）
+
+#### `POST /api/v1/auth/captcha/verify` — 校验人机验证并发放一次性 token ✅ 已实现（自建 S；极验分支 S7）
+
+| 项 | 值 |
+|---|---|
+| 认证 / CSRF | 无（会话建立前） |
+| 限流 | `ratelimit:captcha:<ip>`（与取题共用）。⚠️ 极验分支下本端点是**全站唯一"匿名可触发外呼"**的端点，此桶同时是外呼放大器的闸门 |
+| 审计 | 未通过 `auth.captcha_failed`（`detail`：`provider` + `reason` + 可选 `vendor_reason` / `delta_px`；⛔ 不含答案、不含提交原值、不含 token 与 `pass_token`）；外部服务不可用另记 `auth.captcha_unavailable`（见下） |
+| 判定 | **服务端唯一判定点**。自建 = 容差 + 轨迹规则；极验 = 把 4 个参数转发到 `gcaptcha4.geetest.com/validate` 并采信其结论（⛔ 不重试） |
+
+**请求体（`provider=selfbuilt`）**
+
+| 字段 | 类型 | 必需 | 约束 |
+|---|---|---|---|
+| `captcha_id` | string | ✅ | ≤128 |
+| `x` | number | ✅ | 逻辑坐标（0 ≤ x ≤ width） |
+| `y` | number | ➕ | 仅横向滑动时可省 |
+| `track` | array | ✅ | `[[t_ms, x], …]`，**点数上限 200**（防超大 body） |
+
+**请求体（`provider=geetest`）** = 极验 `captchaObj.getValidate()` 的 4 个字段
+
+| 字段 | 类型 | 必需 | 约束（**防御性护栏**，不是极验契约） |
+|---|---|---|---|
+| `lot_number` | string | ✅ | ≤128 |
+| `captcha_output` | string | ✅ | ≤4096 |
+| `pass_token` | string | ✅ | ≤2048 |
+| `gen_time` | string | ✅ | ≤32 |
+
+⚠️ 极验分支**刻意不收 `captcha_id`**：服务端用自己的配置值 —— 让调用方指定"用哪个验证 id"没有意义，只会多一个可被拿来探测/伪造的输入面。
+
+**成功 200（两个提供方**完全一致**）**
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `captcha_token` | string | 一次性凭证；Redis `captcha:ok:<token>`（TTL 120s，**值绑定解出验证的 IP**） |
+| `expires_in` | number | 秒（默认 120） |
+
+**错误**
+
+| 状态 | code | 触发（`details.reason`） |
+|---|---|---|
+| 400 | `captcha_invalid` | **自建**：`mismatch`（偏差超容差）/ `track_suspicious` / `not_found`（题目过期或已作废）/ `too_many_attempts`（同一题失败 ≥3 次）<br>**极验**：`validate_failed`（极验明确判未通过；`details.vendor_reason` 附其原文） |
+| 400 | `schema_invalid` | 缺字段 / `track` 超长 / 字段超长 |
+| 429 | `rate_limited` | 同 IP 超限 |
+| 503 | `captcha_unavailable` | **极验不可达且 `GEETEST_FAIL_MODE=closed`**（§1.3）。⚠️ 默认 `open` 时**不会**出现本码——那时按「放行」处理并写 `auth.captcha_unavailable` 审计 |
+| 503 | `upstream_unavailable` | Redis 不可用（fail-closed）｜404 `not_found`（关闭 / 未配置 / 熔断且 open） |
+
+**备注**
+
+- **一次性与"成功才消费"**：凭证在 `POST /auth/login` **登录成功时**才 `DEL`。⚠️ 因此它在 120s 内可被复用（**含提交错误密码**）——这是刻意的：否则用户验证通过后打错密码就要重新验证一次。攻击者同样受登录限流约束（§1.4）。
+  🔑 这正是选**两步契约**而不是"把 4 个参数随登录一起提交"的原因：极验的 `pass_token` 是**一次性**的，而两步契约让它在 `/captcha/verify` 只用掉一次（`docs/geetest-captcha.md` §3.4）。
+- **token 绑定 IP**：换 IP 使用同一 token → 400 `captcha_invalid`（挡"打码平台批量出 token 转卖"）。
+- ⛔ 前端**不得**自行判定对错（前端判对错＝纯前端验证码，零防护价值）。极验的 `onSuccess` 同样必须经服务端 `/validate` 才算数。
+- **失败模式（极验）**：`/validate` 请求异常或 HTTP 非 200 时，按 `GEETEST_FAIL_MODE` 处理 —— 默认 **`open`（放行 + 审计 + error 日志 + 30s 熔断）**，`closed` 则 503。完整论证见 `docs/geetest-captcha.md` §9。
+- 自建的完整阈值、容差与"不泄露答案"的写法见 `docs/slider-captcha-selfbuilt.md` §6；极验的参数、签名与响应解析见 `docs/geetest-captcha.md` §4。
 
 #### `POST /api/v1/auth/2fa/verify` — 登录第二步（TOTP）✅ 已实现
 
@@ -842,6 +954,7 @@ signature  = hex( HMAC_SHA256(agent_secret, canonical) )
 **③ 错误码【✅ 已生效】**（⛔ 不得改名，前端 i18n 与错误映射已就位）：`invalid_totp`（400）、`totp_setup_required`（403）。
 
 **④ Redis 键【✅ 已生效】**：`totp:used:<user_id>`（TTL 90s）—— 同一 TOTP 步号只接受一次，防 30s 窗口内重放同一验证码（SET 结构存步号集合，`enable` 与 `2fa/verify` 共用；见 ⑨ 防重放条）。
+✅ **S 系列已新增 4 个键**（已登记进 `docs/database.md` §7）：`captcha:<captcha_id>`（题目与答案，TTL 120s）、`captcha:ok:<captcha_token>`（一次性凭证，值绑定 IP，TTL 120s）、`login:fail:ip:<ip>` 与 `login:fail:acct:<sha256(用户名)[:16]>`（失败计数，TTL = 登录窗口 `loginWindowS`）；另有独立限流桶 `ratelimit:captcha:<ip>`。
 
 **⑤ TOTP 与恢复码【✅ 已生效（B1 原语 + B6/B7 端点）】（零依赖自研，`node:crypto`；二维码渲染用 `qrcode`，server/ 已安装）**
 
@@ -864,8 +977,8 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 
 **⑦ 落地顺序（分块交付，每块独立可验收）**
 
-> 进度（2026-10-02）：**B1–B7 ✅ 代码已落地**（⏳ 待 Owner 跑 `npm test` 验收 + 真机扫码一次）；B8（文档回填）随本轮完成 ✅。
-> ⚠️ 端点可用性：本节 11 个端点**全部可用**（重启 vantage-core 后生效）。
+> 进度（2026-10-03）：**B1–B8 ✅ 已落地**；**S1–S4 ✅ 已落地**（S1 原语+单测、S2 服务/端点/限流/失败计数、S3 前端、S4 文档登记）；**S5–S7 ✅ 已落地**（极验后端）；**S8 ✅ 已落地**（极验前端）。⏳ 全部**待 Owner 跑 `npm test` 验收**（B 系列既有 111 例 + S 系列新增用例）、`vue-tsc` 与真机验证。
+> ⚠️ 端点可用性：本节 13 个端点**全部可用**（重启 vantage-core 后生效）。
 
 | 块 | 内容 | 验收口径 | 状态 |
 |---|---|---|---|
@@ -877,6 +990,12 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 | B6 | `2fa/setup`（含 `qrcode` 依赖）/ `2fa/enable` / `2fa/disable` | 真机扫码绑定一次（人工，见下「需要人工验证什么」） | ✅ 已落地（`test/auth.2fa.test.js`） |
 | B7 | `2fa/recovery/regenerate` / `recovery/verify` + `2fa/verify` + `require_2fa` 受限态补全 + 防重放 | §6.2 的用例 12–14（10/11 已随 B4/B5 覆盖） | ✅ 已落地（同上） |
 | B8 | 文档回填：本节去掉 ⏳、§4.1 表状态列改 ✅、补「需要人工验证什么」清单 | 文档与代码口径一致 | ✅ 已落地（本轮随 B6/B7 完成） |
+| S1 | `utils/slider.js`（出题 / 容差 / 轨迹判定纯函数）+ `test/slider.test.js` | 容差边界、轨迹各规则正反例、200 次出题随机性、**响应字符串不含答案** | ✅ 已落地（`test/slider.test.js`） |
+| S2 | `services/captcha.service.js` + 2 个端点 + 独立限流桶（`utils/redisCounter.js` 复用固定窗口 Lua）+ 两个失败计数器 + 错误码 + 键登记 + 设置项/`getSettingInt` | `docs/slider-captcha-selfbuilt.md` §10.3 的 AC-1…AC-13 | ✅ 已落地（`test/auth.captcha.test.js`） |
+| S3 | `SliderCaptcha.vue` + `Login.vue` 集成 + `store/auth.ts`/`api/private.ts` + i18n | 「首次不出现 / 出错就地出现 / 拖对自动重提」三条人工验证 + `vue-tsc` 通过 | 🔶 已落地（前端，⏳ 待联调与编译验证） |
+| S4 | 文档回填（本节、`database.md` §5.4/§7、`frontend.md` §4.2） | 文档与代码口径一致 | ✅ 已落地（后端部分；`frontend.md` 的公开域口径待一并更正） |
+| S5–S7 | 极验 v4 后端（纯函数 + provider 抽象 + 端点/配置/熔断） | `docs/geetest-captcha.md` §10.1/§10.2（AC-G1…AC-G12） | ✅ 已落地（`test/geetest.test.js`、`test/auth.captcha.geetest.test.js`；落地记录见该文 §16） |
+| S8 | 极验 v4 前端（`GeetestCaptcha.vue` + `utils/geetest.ts` + `Login.vue` 按 `provider` 选组件 + i18n） | 「首次不出现 / 密码错后就地出现官方按钮 / 通过后自动重提 / `CAPTCHA_PROVIDER=selfbuilt` 时回落滑块」+ `vue-tsc` 通过 | ✅ 已落地（前端；⏳ 待 `vue-tsc` 与真机联调，落地记录见 `docs/geetest-captcha.md` §16.7） |
 
 **需要人工验证什么（Owner 清单，B6/B7 验收口径）**
 
@@ -887,7 +1006,8 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 5. `security.require_2fa=true` 下用一个未绑定账号登录 → 应被引导到绑定页并完成强制绑定。
 6. （可选）`node scripts/create-user.js --reset-2fa <username>` 走一遍离线救援，确认被锁用户可重新登录。
 
-> 未列入本方案的（⛔ 不在本次范围）：用户管理 CRUD（§4.9）、`PATCH /api/v1/settings`（§4.10）、OIDC 流程、WS 鉴权、前端任何改动。
+> 未列入 **B 系列**的（⛔ 当时不在范围）：用户管理 CRUD（§4.9）、`PATCH /api/v1/settings`（§4.10）、OIDC 流程、WS 鉴权、前端任何改动。
+> ⚠️ **S 系列例外**：登录人机验证**包含前端改动**（`web/src/components/SliderCaptcha.vue` + 登录页集成），这是它的必要组成部分。
 
 **⑧ 待 Owner 拍板（D1–D6 已按建议实现，待追认；D7 为实现期安全收敛，待追认）**
 
@@ -1295,6 +1415,8 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 | `security.require_2fa` | bool | false |
 | `credential_rotate.reminder_days` | int | 90 |
 | `credential_rotate.notify` | bool | true |
+| `security.login_captcha.enabled` | bool | **true**（S 系列：开启＝"密码错后要求滑块"；关闭时取题端点 404） |
+| `security.login_captcha.after_failures` | int | **1**（S 系列：失败几次后开始要求，1–10；1 = 一次密码错就要） |
 
 - ✅ 每次变更写审计（`action=settings.update`，`detail` 含 key/旧值/新值，⛔ 不含密钥）。
 - ⛔ 该接口**不承载**通道密钥、TOTP 密钥等任何敏感值（分别在 `channels` / 用户 2FA 接口）。
@@ -1404,13 +1526,25 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 13. ✅ 恢复码用后即废（同一码第二次 → 400），响应含 `remaining_recovery_codes`；`require_2fa=true` 时禁止自助解绑（§4.1.1 ⑧ D3，409 `conflict`）。
 14. ✅ 登录限流：`/auth/login`、`/auth/2fa/verify` 与 `/auth/2fa/recovery/verify` 共用 `ratelimit:login:<ip>`（10 次/5 分钟，超限 429 + `Retry-After`）。
 
+**以下为人机验证（滑块）的专项验收用例（✅ 已实现并有测试覆盖：`server/test/auth.captcha.test.js`；完整清单见 `docs/slider-captcha-selfbuilt.md` §10.3）**
+
+15. ✅ **首次登录不出现滑块**：无失败计数时，不带 `captcha_token` 也能登录成功，⛔ 不返回 `captcha_required`（本需求的核心断言）。
+16. ✅ **密码错一次后引入**：失败响应 401 `invalid_credentials` + `details.captcha_required:true`，两个失败计数器（`login:fail:ip:*` 与 `login:fail:acct:*`）各 +1；随后缺 token 提交 → 400 `captcha_required`。
+17. ✅ **一次性与绑定**：同一 `captcha_token` 在登录成功后再次使用 → 400 `captcha_invalid`；换 IP 使用同一 token → 400 `captcha_invalid`。
+18. ✅ **分布式兜底**：多个 IP 各失败 1 次打同一账号，新 IP 再试 → 400 `captcha_required`（按账号计数生效）。
+
+**✅ 已实现（S7 后端）：极验 v4 提供方的专项用例** —— 12 条见 `docs/geetest-captcha.md` §10.2（`AC-G1`…`AC-G12`），集成用例在 `server/test/auth.captcha.geetest.test.js`（⛔ 全程打桩 `fetchImpl`，不真连极验）+ 纯函数单测 `server/test/geetest.test.js`：`AC-G1` 首次登录免验证、`AC-G2` 失败计数、`AC-G3` 缺凭证 400 且**不调极验**、`AC-G4` challenge 返回 `provider:'geetest'` 且**不含** `bg_svg`/`piece_svg`/`expires_in`、`AC-G5` 二次校验只发**一次**请求且签名正确、`AC-G6` 极验判 fail → 400 `validate_failed`、`AC-G7`/`AC-G8` 极验不可达时按 `failMode` 放行或 503、`AC-G9` HTTP 500/非 JSON 记为**不可用**（⛔ 不记成"用户未通过"）、`AC-G10` `captcha_token` 一次性、`AC-G11` 绑定 IP、`AC-G12` 显式声明 geetest 却缺密钥时**启动即 `CONFIG_INVALID`**。另有 `AC-G12b` 覆盖"未设置 `CAPTCHA_PROVIDER` 时自动推断"。⏳ 待 Owner 跑 `npm test` 验收。
+
+> ⚠️ 上面的 15–18 是**提供方无关**的（首次免验证、失败计数、一次性、分布式兜底），换极验后**必须继续全绿**；自建**专有**的用例（题目比对/容差/轨迹/`too_many_attempts`/题目过期）留在 `docs/slider-captcha-selfbuilt.md` §10.3，**不迁移**。
+
 ---
 
 ## 7. 待 Owner 拍板清单（API 视角）
 
 > ✅ **本清单已清空**：A1–A14 全部拍板（下表逐条标注结论与落点）。唯一保留的开放项是 **A13 的 SSO 对接细节**（`docs/database.md` §12.2 N3），不阻塞任何里程碑。
 > ✅ **D1–D6 已全部按建议实现（2026-10-02，B6/B7 落地），待 Owner 追认**；逐条见 **§4.1.1 ⑧**。新增 **D7**（setup 在 `totp_pending` 态的安全收敛，见 ⑧）与 D2 同类：实现与 §4.1 原文字面有偏差，理由已写明，等追认。
-> 🆕 **2026-10-03 新增范围：滑动验证码**（原设计文档未覆盖此项）——选型调研见 `docs/slider-captcha.md`（**C1 已定 = 自建**），实施规范见 `docs/slider-captcha-selfbuilt.md`（开放决策 S1–S6，S1 阻塞开工）。触发策略：**首次登录不要求，出现密码错误后引入人机验证**。落地时需同步本节：登录端点加可选 `captcha_token` 与失败响应 `details.captcha_required`、§1.3 错误码加 `captcha_required`/`captcha_invalid`、§1.4 限流加 `ratelimit:captcha:<ip>`、§4.10 白名单加 `security.login_captcha.*`。
+> 🆕 **2026-10-03 新增范围：滑动验证码**（原设计文档未覆盖此项）——选型调研见 `docs/slider-captcha.md`（**C1 已定 = 自建**），实施规范见 `docs/slider-captcha-selfbuilt.md`（开放决策 **C6–C11**：本轮**已按文档建议实现**——按账号计数、阈值 1、成功不重置、token 绑定 IP，待 Owner 追认）。触发策略：**首次登录不要求，出现密码错误后引入人机验证**。✅ **契约已并入本文**（§1.2 ② 豁免范围、§1.3 错误码 `captcha_required`/`captcha_invalid`、§1.4 独立限流桶 `ratelimit:captcha:<ip>`、§4.1 两个端点与登录端点改动、§4.10 白名单两个 key、§6.2 用例 15–18）；✅ **契约与代码均已落地**（集成用例 `server/test/auth.captcha.test.js`），⏳ 待 Owner 跑 `npm test` 验收。
+> 🆕 **2026-10-03 新增范围二：人机验证提供方切换为极验 v4** —— 变更方案见 `docs/geetest-captcha.md`。**已定**：**C12**（新增 `CAPTCHA_PROVIDER`，**默认 `geetest`**，自建滑块**保留**为可选 provider、⛔ 不删代码）、**C13**（极验不可达时 **fail-open 放行**；连带义务：审计 `auth.captcha_unavailable` + `logger.error` + 3s 超时且不重试）、**C16**（用极验**官方按钮**：`product='popup'`，按钮 DOM 在页面加载时生成、容器默认隐藏，**密码错后才显示**）。**待定**：C14（`captcha_unavailable` 错误码登记，§1.3 由 26 → 27 条）、C15（`gt4.js` 引入方式）、C17（⛔ 不传 `userInfo`）、C18（**保持现有两步端点契约**，不改成一次提交）、C19（熔断 / 出站并发上限）。⛔ **尚未落地**：本节 §1.3 / §1.4 / §4.1 描述的都是**自建滑块的现状**；极验的字面契约（§6 的双 provider 分支、`details.reason` 新枚举）随 **S5–S9** 落地后才并入本文。⚠️ 另需注意：`CAPTCHA_PROVIDER` 默认值改为 `geetest` 后，**既有部署升级到该版本会因缺密钥启动失败**（刻意的 fail-fast，见变更方案 §8.1）。
 
 | # | 议题 | 建议 |
 |---|---|---|

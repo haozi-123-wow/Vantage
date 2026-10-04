@@ -106,6 +106,44 @@ export function createFakeRedisHash({ now = () => Date.now() } = {}) {
     return [...entry.value];
   };
 
+  /**
+   * hash 字段自增（滑块题目的 `attempts` 计数用它）——返回**自增后**的值，与 ioredis 一致。
+   * ⚠️ 键不存在时按 hash 新建（Redis 的 HINCRBY 正是如此），⛔ 不要抛错。
+   */
+  const hincrby = async (key, field, increment = 1) => {
+    commands.push({ cmd: 'hincrby', key, field, increment });
+    let entry = alive(key);
+    if (!entry) {
+      entry = { type: 'hash', value: new Map(), expiresAt: null };
+      store.set(key, entry);
+    }
+    if (entry.type !== 'hash') throw new Error('WRONGTYPE：键不是 hash');
+    const next = (Number(entry.value.get(field)) || 0) + Number(increment);
+    entry.value.set(field, String(next));
+    return next;
+  };
+
+  /**
+   * 字符串自增（通用计数用）。
+   * ⛔ 不要用它替代固定窗口的那段 Lua：`INCR` 之后再 `EXPIRE` 是**两步非原子**，
+   *    崩在中间会留下没有 TTL 的计数器（见 utils/redisCounter.js 的说明）。
+   */
+  const incr = async (key) => {
+    commands.push({ cmd: 'incr', key });
+    let entry = alive(key);
+    if (!entry) {
+      entry = { type: 'string', value: '0', expiresAt: null };
+      store.set(key, entry);
+    }
+    if (entry.type !== 'string') throw new Error('WRONGTYPE：键不是 string');
+    const next = (Number(entry.value) || 0) + 1;
+    entry.value = String(next);
+    return next;
+  };
+
+  /** 键是否存在（返回 0/1，与 Redis 单键 EXISTS 一致；过期的键按不存在处理） */
+  const exists = async (key) => (alive(key) ? 1 : 0);
+
   const expire = async (key, ttlS) => {
     commands.push({ cmd: 'expire', key, ttlS });
     const entry = alive(key);
@@ -186,7 +224,23 @@ export function createFakeRedisHash({ now = () => Date.now() } = {}) {
   /** 批量命令链：multi() 与 pipeline() 共用一个实现（原子性差异见文件头） */
   function chain() {
     const queued = [];
-    const api = { hset, hget, hgetall, sadd, srem, smembers, expire, del, ttl, get, set, eval: evalScript };
+    const api = {
+      hset,
+      hget,
+      hgetall,
+      hincrby,
+      incr,
+      exists,
+      sadd,
+      srem,
+      smembers,
+      expire,
+      del,
+      ttl,
+      get,
+      set,
+      eval: evalScript,
+    };
     const builder = {};
     for (const name of Object.keys(api)) {
       builder[name] = (...args) => {
@@ -217,6 +271,9 @@ export function createFakeRedisHash({ now = () => Date.now() } = {}) {
     hset,
     hget,
     hgetall,
+    hincrby,
+    incr,
+    exists,
     sadd,
     srem,
     smembers,

@@ -223,6 +223,8 @@ CHECK (password_hash IS NOT NULL OR oidc_subject IS NOT NULL)       -- 至少一
 | `security.require_2fa` | bool | false | 强制所有账号绑定 TOTP（`docs/api.md` §4.1） |
 | `credential_rotate.reminder_days` | int | 90 | 凭证轮换提醒阈值（§5.2） |
 | `credential_rotate.notify` | bool | true | 是否发通知（关＝只留面板徽标，§5.2） |
+| `security.login_captcha.enabled` | bool | ✅ **true**（S 系列） | 登录人机验证（滑块）总开关；关闭时取题端点按 404 处理，登录也永不因滑块被拒（`docs/api.md` §4.1） |
+| `security.login_captcha.after_failures` | int | ✅ **1**（S 系列） | 同 IP / 同账号失败几次后开始要求人机验证（1 = 一次密码错就要；范围 1–10） |
 | （预留）`alert.default_cooldown_s` 等 | — | — | 将来新增开关**必须先加入白名单** |
 
 - ✅ 生效方式：面板 `PATCH` 后**立即生效**——core 读取走「Redis 缓存 `settings:cache`（TTL 建议 30s）+ 变更时主动失效」，避免每请求查库；⛔ 不需要重启容器。
@@ -570,9 +572,18 @@ POST /api/v1/agent/report
 | `snapshot:agent:<id>` | hash/string | 5–15s | 公开「当前快照」缓存 | ➕ §5.4「带缓存」 |
 | `ip:recent:<agent_id>` | list/zset | 10min | Flapping 判定（窗口内变化次数） | ➕ 决策 #39 |
 | `notify:tokenbucket:<channel_id>` | hash | 常驻 | 通道令牌桶 | ➕ 决策 #23 |
+| `totp:used:<user_id>` | set | **90s** | TOTP 步号防重放（同一步只接受一次；✅ B7 已落地，此处补登记） | ✅ `docs/api.md` §4.1.1 ④ |
+| `ratelimit:captcha:<ip>` | 计数 | 60s 窗口 | 滑块取题/验题限流（⛔ 与 `ratelimit:login` **独立**，"换一张图"不该消耗登录额度） | ✅ S 系列、`docs/api.md` §1.4 |
+| `captcha:<captcha_id>` | hash | **120s** | 滑块题目与**答案**（`x`、`y`、`created_at`、`attempts`）；⛔ 答案只在 Redis，不进 PG/日志/响应 | ✅ S 系列 |
+| `captcha:ok:<captcha_token>` | string | **120s** | 人机验证通过后的一次性凭证，**值 = 解出该题的 IP**（防 token 转卖） | ✅ S 系列 |
+| `login:fail:ip:<ip>` | 计数 | 登录窗口（默认 300s） | 登录失败计数（按 IP）→ 决定"是否要求人机验证" | ✅ S 系列 |
+| `login:fail:acct:<sha256(用户名)[:16]>` | 计数 | 登录窗口（默认 300s） | 登录失败计数（**按账号**）→ 兜住"代理池每个 IP 只试一次"的绕过；⛔ 键里不放明文用户名 | ✅ S 系列 |
+| `captcha:vendor:down:<provider>` | 计数 | **30s** | 外部人机验证服务（极验）的**短时熔断**标记：不可达后置位，期间不再干等超时；`failMode=open` 时"熔断 = 该层视为不存在"（出题 404、登录不要求验证），`closed` 时仍要求凭证但立即 503。🔑 它是**性能优化而非安全控制**：读不到按未熔断处理 | ✅ S7、`docs/geetest-captcha.md` §9.3（C19） |
+>
+> 📌 **已落地（S7，2026-10-03）**：人机验证提供方已切为**极验 v4**（`CAPTCHA_PROVIDER`，未设置时按密钥自动推断，见 `docs/geetest-captcha.md` §8.1/§16）。对键空间的影响只有三点：① `captcha:<captcha_id>` 在 **`provider=geetest` 下不再使用**（题目与答案由极验云端管理，我们没有答案可存），`provider=selfbuilt` 下照旧；② `captcha:ok:*`、`login:fail:*`、`ratelimit:captcha:*` 四个键**完全不变** —— 它们是提供方无关的编排层（策略、计数、一次性凭证），这正是选「两步端点契约」的直接收益；③ 新增 `captcha:vendor:down:<provider>`（上表末行）。⚠️ `ratelimit:captcha:<ip>` 在极验下**更重要**：`/captcha/verify` 已成为全站唯一「匿名可触发外呼」的端点，此桶同时是外呼放大器的闸门。
 
 > ✅ `nonce` TTL 必须 **≥ 签名窗口**（默认 600s ≥ 300s），消除 120–300s 重放窗口。
-> ✅ 已定（本轮）：**单个 Redis 实例，不分 DB index、不拆实例**，各用途靠键名前缀区分（`session:` / `nonce:` / `batch:` / `ratelimit:` / `alert:cooldown:` / `live:`），并把 `maxmemory-policy` 设为 **`noeviction`** —— 否则 nonce/幂等键被驱逐会**重开重放窗口**、幂等失效。
+> ✅ 已定（本轮）：**单个 Redis 实例，不分 DB index、不拆实例**，各用途靠键名前缀区分（`session:` / `nonce:` / `batch:` / `ratelimit:` / `alert:cooldown:` / `live:` / `totp:used:` / `captcha:` / `captcha:ok:` / `captcha:vendor:` / `login:fail:`），并把 `maxmemory-policy` 设为 **`noeviction`** —— 否则 nonce/幂等键被驱逐会**重开重放窗口**、幂等失效。
 > ➕ 落地要求：为 Redis `used_memory` 与 **`evicted_keys`（必须恒为 0）** 加运维监控；内存吃紧时先清理 `ratelimit:*`、`snapshot:*`（可重建），⛔ 不要靠开淘汰策略解决。若会话/限流将来把实例撑爆，再评估拆独立实例（当前 5 台规模不需要）。
 
 ---

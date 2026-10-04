@@ -26,15 +26,24 @@ const realtime = useRealtimeStore()
 const { resolved, toggle } = useTheme()
 
 const navItems = computed(() => {
-  const items: Array<{ name: 'host-list' | 'alerts' | 'settings'; label: string }> = [
+  const items: Array<{ name: 'host-list' | 'alerts' | 'account' | 'settings'; label: string }> = [
     { name: 'host-list', label: t('nav.hosts') },
     { name: 'alerts', label: t('nav.alerts') },
+    // 自助类：所有登录用户都要能进（⛔ 不要跟着 isAdmin 一起藏起来）
+    { name: 'account', label: t('nav.account') },
   ]
   if (auth.isAdmin) items.push({ name: 'settings', label: t('nav.settings') })
   return items
 })
 
 const connectionLabel = computed(() => t(`realtime.${realtime.status}`))
+
+/**
+ * 受限态（`totp_setup_required`）下 `me` 返回 403、`auth.user` 为 null，但**会话仍然存在** ——
+ * ⛔ 不能显示「登录」按钮（用户会以为自己没登录），也要能登出。
+ */
+const hasSession = computed(() => auth.isAuthenticated || auth.status === 'totp_setup_required')
+const userLabel = computed(() => auth.user?.display_name || auth.user?.username || '')
 
 async function onLogout(): Promise<void> {
   await auth.logout()
@@ -88,8 +97,8 @@ function onLocaleChange(value: LocaleCode): void {
         {{ resolved === 'dark' ? t('theme.dark') : t('theme.light') }}
       </ElButton>
 
-      <template v-if="auth.isAuthenticated">
-        <span class="shell__user">{{ auth.user?.display_name || auth.user?.username }}</span>
+      <template v-if="hasSession">
+        <span v-if="userLabel" class="shell__user">{{ userLabel }}</span>
         <ElButton size="small" @click="onLogout">{{ t('nav.logout') }}</ElButton>
       </template>
       <ElButton v-else size="small" @click="router.push({ name: 'login' })">

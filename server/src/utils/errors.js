@@ -26,6 +26,16 @@ export const ERROR_CODES = Object.freeze({
   invalid_setting_value: { status: 400, message: '设置项的值类型不符合该 key 的定义' },
   // TOTP 验证码错误（docs/api.md §4.1 的 `2fa/enable` 明确要求 400 + 该 code）
   invalid_totp: { status: 400, message: '验证码不正确，请重新输入' },
+  // 人机验证（滑动验证码）：docs/api.md §4.1、docs/slider-captcha-selfbuilt.md §5.4
+  // ⛔ 与 401 分开是有意的：前端必须能区分"该过人机验证"与"密码错"，否则没法就地弹滑块
+  captcha_required: { status: 400, message: '请先完成人机验证' },
+  captcha_invalid: { status: 400, message: '人机验证未通过，请重新尝试' },
+  /**
+   * 外部人机验证服务（极验）不可用 **且** `GEETEST_FAIL_MODE=closed`（docs/geetest-captcha.md §9）。
+   * ⚠️ 503 的 message 会被 `buildErrorBody` 折叠成通用文案（`expose` 只对 <500 为真）——
+   *    前端必须按 **`error.code`** 匹配文案，⛔ 不要依赖 message。
+   */
+  captcha_unavailable: { status: 503, message: '人机验证服务暂时不可用，请稍后重试' },
 
   // 401
   signature_invalid: { status: 401, message: '签名校验失败' },

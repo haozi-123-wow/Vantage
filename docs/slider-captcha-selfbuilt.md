@@ -3,7 +3,12 @@
 > **性质**：实施规范（可直接照着写代码；**不含实现代码**）。
 > **依据**：`docs/slider-captcha.md`（选型结论 **C1 = A 自研**）、`docs/api.md` §1.3（错误码）/§1.4（限流）/§4.1（登录与会话）/§4.10（settings 白名单）、`docs/database.md` §7（Redis 键空间契约）、`docs/frontend.md` §4.2（登录页）。
 > **本轮 Owner 明确的需求**：① 用户**第一次**登录**不出现**验证码；② **出现密码错误后**，后续登录引入人机验证。
-> **状态**：⏳ 未实现；❓ 待追认项见 §12。
+> **状态**：✅ **已落地（S1–S4）**——S1 原语 + 单测、S2 服务/端点/限流/失败计数、S3 前端组件与登录页集成、S4 文档登记；⏳ 待 Owner 跑 `npm test`（`server/test/slider.test.js`、`server/test/auth.captcha.test.js`）与真机拖拽验证。
+> 📝 **2026-10-03 变更（不改本实现）**：Owner 决定人机验证**改用极验 GeeTest v4**（**C12 = G1-a**）——本文这套自建实现**降级为可选 provider（`CAPTCHA_PROVIDER=selfbuilt`）并完整保留，⛔ 不删代码**（它是内网/离线部署的唯一可用选项，也是极验不可用时的回滚目标）。变更方案见 `docs/geetest-captcha.md`。
+> 📝 **2026-10-03 前端 S8 落地**：`Login.vue` 现在按 `/auth/captcha/challenge` 响应里的 `provider` **运行时选组件**（`geetest` → `GeetestCaptcha.vue`，`selfbuilt` → 本方案的 `SliderCaptcha.vue`）。⚠️ 对本组件是**最小改动**：题目类型收窄为 `SelfbuiltCaptchaChallenge`、`reasonOf` 改为共享实现；**交互、emit 契约与行为零变化**（`CAPTCHA_PROVIDER=selfbuilt` 时与 S3 完全一致）。
+> **本文哪些部分在 `provider=geetest` 下继续有效**：§2（触发语义与登录检查顺序，⛔ 8 条契约一条都不改）、§5.3（登录端点改动）、§6.4（token 绑定与消费时机）、§8.2（两个 settings 项）、§10.3 的 **AC-1/2/3/5/11/12/13**（提供方无关）。
+> **哪些只在 `provider=selfbuilt` 下适用**：§4.1 的 `captcha:<id>` 题目键、§6（出题与判定算法）、§7.3（`bind`/滑块交互口径被极验方案取代）、AC-4/6/7/8/9/10。
+> ❓ 待追认项见 §12：本轮**已按本文建议实现**（阈值 1、按账号维度计数、成功后不重置、token 绑定 IP、程序化 SVG 底图），如与 Owner 判断不同请按 §12 回退。
 
 ---
 
@@ -162,6 +167,7 @@ requireCaptcha =
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
+| `provider` | string | ➕ **2026-10-03 新增（S7）**：恒为 `selfbuilt`；前端据此在 `SliderCaptcha.vue` 与 `GeetestCaptcha.vue` 之间选组件（`docs/api.md` §4.1） |
 | `captcha_id` | string | ≥16 字节随机（base64url） |
 | `bg_svg` | string | 背景图 SVG 文本（含缺口） |
 | `piece_svg` | string | 拼图块 SVG 文本 |
@@ -263,8 +269,11 @@ requireCaptcha =
 - **props**：`width?`、`height?`（默认取 challenge 响应）。
 - **emits**：`success(captchaToken)`、`fail(reason)`、`cancel`。
 - **内部流程**：`onMounted` → `captchaChallenge()` → 内联渲染两个 SVG（`v-html` + ⛔ 仅渲染**自己的**服务端响应，⛔ 不渲染任何用户输入） → `pointerdown/move/up` 采集 `track`（含时间戳）→ 松手即 `captchaVerify()` → 成功 `emit('success', token)`。
-- 交互细节：拖动时限制在 `[0, width - pieceWidth]`；松手若未对齐，**抖动回位**并提示"再试一次"；⛔ 不在前端判定对错（前端判对错 = 纯前端滑块，零防护）。
-- 键盘可达：容器 `tabindex="0"`，`←/→` 每次移动 5px、`Enter` 提交；`aria-label` + `role="slider"` 语义。
+- 交互细节（✅ 2026-10-03 修订）：**两个拖动面** —— ① 直接拖图片（原有交互，保留）；② 图片下方**滑块轨道 + 手柄**，手柄与拼图块联动（同一个 `pieceX` 同时驱动拼图块的 `translate3d` 与手柄的 `left`；轨道的提示文案复用 `captcha.hint`）。两者都限制在 `[0, width - pieceWidth]`。
+- 坐标换算：图片面 `逻辑px = CSSpx / scale`；手柄面 `逻辑px = CSSpx × travelMax / (轨道宽 − 手柄宽)`（拖动开始时量一次，避免每帧测量）。
+- `pieceWidth` 取**拼图块自身**宽度：量 SVG **内容包围盒**（`getBBox()` 返回 viewBox 用户单位 = 逻辑 px）。⛔ 不要用 `offsetWidth` —— 服务端 `piece_svg` 与画布**同尺寸**（320×160），量出来恒等于画布宽，只能走 15% 兜底（48px，真实值 44+10=54px），结果是允许拼图块多拖 6px 出画布（被 `overflow:hidden` 裁掉）。⚠️ 交接文档 `bbedfcd6` 曾记「最多只能拖 48px / 拖不到位」——按代码复算：`travelMax = 320 − 48 = 272`，而答案区间是 `[112, 262]`，**够得着**；该结论把"兜底宽度"误当成了"行程上限"。
+- 松手若未对齐，**抖动回位**并提示"再试一次"；⛔ 不在前端判定对错（前端判对错 = 纯前端滑块，零防护）。
+- 键盘可达（✅ 2026-10-03 修订）：`role="slider"` + `tabindex="0"` 从"整张图"移到**手柄**上（ARIA slider 的惯用位置）；手柄 `←/→` 每次 5px、`Enter` 提交；`aria-valuemin/max/now` 用逻辑坐标。图片拖动面退化为纯指针交互（不参与 Tab 顺序），⛔ 不因此降低键盘可用性。
 
 ### 7.2 `Login.vue` 集成（"出错才出现"）
 
@@ -285,7 +294,9 @@ requireCaptcha =
 
 ### 7.4 i18n（`zh-CN` / `en-US` 都要加，⛔ 不硬编码）
 
-`captcha.title`（请完成安全验证）、`captcha.hint`（拖动滑块使拼图吻合）、`captcha.retry`、`captcha.expired`、`captcha.failed`、`captcha.required`（检测到多次登录失败，请完成验证）、`errors.captcha_required`、`errors.captcha_invalid`。
+`captcha.title`（请完成安全验证）、`captcha.hint`（拖动滑块使拼图吻合，**同时用作滑块轨道内的提示文案**）、`captcha.ariaLabel`（**手柄**的无障碍标签：左右方向键每次 5px、回车提交）、`captcha.loading`、`captcha.retry`、`captcha.refresh`、`captcha.cancel`、`captcha.expired`、`captcha.failed`、`captcha.suspicious`、`captcha.tooManyAttempts`、`captcha.unavailable`、`captcha.verified`、`captcha.required`（检测到多次登录失败，请完成验证）。
+
+> ⚠️ 2026-10-03 更正：错误码 key 的实际命名是 **`error.*`（单数）**——即 `error.captcha_required`、`error.captcha_invalid`，本文档此前写的 `errors.*` 与代码不符（`web/src/locales/zh-CN.ts` 的 `error` 段）。
 
 ### 7.5 降级与无障碍
 
@@ -342,23 +353,23 @@ requireCaptcha =
 
 ⚠️ `fake-redis-hash.js` 需补两个能力：`incr`（失败计数）与 `exists`（token/题目存在性判定）——⛔ 不要用"种值"绕过去，否则测不到真实路径。
 
-### 10.3 验收用例（供联调，编号 S-1…S-13）
+### 10.3 验收用例（供联调，编号 **AC-1…AC-13**）
 
 | # | 用例 | 期望 |
 |---|---|---|
-| **S-1** | **首次登录（无失败计数）不带 token** | ✅ 200 成功；⛔ 全程不出现滑块、不返回 `captcha_required`（**本需求的核心断言**） |
-| **S-2** | 密码错 1 次 | 401 `invalid_credentials` + `details.captcha_required:true`；`login:fail:ip:*` 与 `login:fail:acct:*` 均为 1 |
-| **S-3** | 失败后再提交且缺 token | 400 `captcha_required`（⛔ 不是 401） |
-| S-4 | 出题 → 正确滑动 → verify → 带 token 登录 | 200；`captcha:ok:<token>` 已消费 |
-| S-5 | 同一 token 再次登录 | 400 `captcha_invalid`（一次性） |
-| S-6 | 有效期内（120s）token 复用于"密码仍错"的提交 | 允许提交（⛔ 不要求重滑），密码错仍 401 |
-| S-7 | 偏差 > 容差 | 400 `captcha_invalid`（`mismatch`），`attempts+1` |
-| S-8 | 同一题连续错 3 次 | 第 3 次后该 `captcha_id` 作废（`too_many_attempts`） |
-| S-9 | 题目过期（TTL 到）后 verify | 400 `captcha_invalid`（`expired`） |
-| S-10 | `track` 点数 <8 / 时长 <300ms / 匀速 | 400 `captcha_invalid`（`track_suspicious`）+ 审计 `auth.captcha_failed` |
-| S-11 | **换 IP 用同一 token** | 400 `captcha_invalid`（token 绑定 IP） |
-| **S-12** | **代理池场景**：5 个不同 IP 各失败 1 次打同一账号，第 6 次（新 IP） | 400 `captcha_required`（按账号计数兜住分布式喷洒） |
-| S-13 | `security.login_captcha.enabled=false` | 出题端点 404；登录永不因滑块被拒（⛔ 既有测试不得回归；**唯一需要按 §5.3 意图改写**的是那条 `details === undefined` 断言） |
+| **AC-1** | **首次登录（无失败计数）不带 token** | ✅ 200 成功；⛔ 全程不出现滑块、不返回 `captcha_required`（**本需求的核心断言**） |
+| **AC-2** | 密码错 1 次 | 401 `invalid_credentials` + `details.captcha_required:true`；`login:fail:ip:*` 与 `login:fail:acct:*` 均为 1 |
+| **AC-3** | 失败后再提交且缺 token | 400 `captcha_required`（⛔ 不是 401） |
+| AC-4 | 出题 → 正确滑动 → verify → 带 token 登录 | 200；`captcha:ok:<token>` 已消费 |
+| AC-5 | 同一 token 再次登录 | 400 `captcha_invalid`（一次性） |
+| AC-6 | 有效期内（120s）token 复用于"密码仍错"的提交 | 允许提交（⛔ 不要求重滑），密码错仍 401 |
+| AC-7 | 偏差 > 容差 | 400 `captcha_invalid`（`mismatch`），`attempts+1` |
+| AC-8 | 同一题连续错 3 次 | 第 3 次后该 `captcha_id` 作废（`too_many_attempts`） |
+| AC-9 | 题目过期（TTL 到）后 verify | 400 `captcha_invalid`（`expired`） |
+| AC-10 | `track` 点数 <8 / 时长 <300ms / 匀速 | 400 `captcha_invalid`（`track_suspicious`）+ 审计 `auth.captcha_failed` |
+| AC-11 | **换 IP 用同一 token** | 400 `captcha_invalid`（token 绑定 IP） |
+| **AC-12** | **代理池场景**：5 个不同 IP 各失败 1 次打同一账号，第 6 次（新 IP） | 400 `captcha_required`（按账号计数兜住分布式喷洒） |
+| AC-13 | `security.login_captcha.enabled=false` | 出题端点 404；登录永不因滑块被拒（⛔ 既有测试不得回归；**唯一需要按 §5.3 意图改写**的是那条 `details === undefined` 断言） |
 
 ### 10.4 人工验证（Owner）
 
@@ -373,10 +384,10 @@ requireCaptcha =
 
 | 块 | 内容 | 验收 | 估时 |
 |---|---|---|---|
-| **S-1** | `utils/slider.js` + `slider.test.js`（出题/校验/轨迹，零依赖） | §10.1 全绿 | 0.5 天 |
-| **S-2** | `captcha.service.js` + 2 个端点 + `createCaptchaRateLimiter` + 失败计数 + 错误码 + 键登记 + 设置项/`getSettingInt` | §10.3 的 S-2…S-13 | 1 天 |
-| **S-3** | `SliderCaptcha.vue` + `Login.vue` 集成 + store/api 改造 + i18n | S-1 的人工验证 + `vue-tsc` 通过 | 1 天 |
-| **S-4** | 文档回填（`api.md` §1.3/§1.4/§4.1/§4.10、`database.md` §5.4/§7、`frontend.md` §4.2）+ 人工验证清单 | 文档与代码口径一致 | 0.5 天 |
+| **S1** | `utils/slider.js` + `slider.test.js`（出题/校验/轨迹，零依赖） | §10.1 全绿 | 0.5 天 |
+| **S2** | `captcha.service.js` + 2 个端点 + `createCaptchaRateLimiter` + 失败计数 + 错误码 + 键登记 + 设置项/`getSettingInt` | §10.3 的 AC-1…AC-13 | 1 天 |
+| **S3** | `SliderCaptcha.vue` + `Login.vue` 集成 + store/api 改造 + i18n | §10.4 的人工验证 + `vue-tsc` 通过 | 1 天 |
+| **S4** | 文档回填（`api.md` §1.3/§1.4/§4.1/§4.10、`database.md` §5.4/§7、`frontend.md` §4.2）+ 人工验证清单 | 文档与代码口径一致 | 0.5 天 |
 
 ---
 
@@ -384,12 +395,12 @@ requireCaptcha =
 
 | # | 议题 | 建议 | 状态 |
 |---|---|---|---|
-| **S1** | **是否同时按账号维度记失败**（防代理池每个 IP 一次免费尝试绕过滑块） | **是**（不加则分布式喷洒基本绕过本策略） | ❓ **待追认（唯一影响安全属性的一条）** |
-| S2 | 阈值默认值 | **1**（一次密码错即要求，符合本轮需求原话）；可配 1–10 | ❓ 待追认 |
-| S3 | 成功登录后是否重置失败计数 | **不重置**（简单、无绕过面）；代价：本窗口内后续登录仍需滑块 | ❓ 待追认 |
-| S4 | token 是否绑定 IP | **是**（挡 token 转卖）；代价：换网络需重滑 | ❓ 待追认 |
-| S5 | 底图：程序化 SVG（零素材）还是内置照片 | **程序化 SVG**（照片素材有许可问题，且 §6.1 已论证"更难识别"不成立） | ❓ 待追认 |
-| S6 | 出题端点限流阈值 | 30 次/分钟 | ❓ 待追认 |
+| **C6** | **是否同时按账号维度记失败**（防代理池每个 IP 一次免费尝试绕过滑块） | **是**（不加则分布式喷洒基本绕过本策略） | 🔶 **已按建议实现**（`login:fail:acct:<hash>`），待追认 |
+| C7 | 阈值默认值 | **1**（一次密码错即要求，符合本轮需求原话）；可配 1–10 | 🔶 已按建议实现（默认 1 + `getSettingInt` 夹取），待追认 |
+| C8 | 成功登录后是否重置失败计数 | **不重置**（简单、无绕过面）；代价：本窗口内后续登录仍需滑块 | 🔶 已按建议实现（不重置），待追认 |
+| C9 | token 是否绑定 IP | **是**（挡 token 转卖）；代价：换网络需重滑 | 🔶 已按建议实现（值存 IP），待追认 |
+| C10 | 底图：程序化 SVG（零素材）还是内置照片 | **程序化 SVG**（照片素材有许可问题，且 §6.1 已论证"更难识别"不成立） | 🔶 已按建议实现（零素材），待追认 |
+| C11 | 出题端点限流阈值 | 30 次/分钟 | 🔶 已按建议实现（`RATELIMIT_CAPTCHA_PER_MINUTE=30`），待追认 |
 
 ---
 

@@ -46,8 +46,9 @@ export const SERVICE_VERSION = '0.8.0';
  * @param {object} deps.db { app: Pool, migrator?: Pool }
  * @param {object} deps.redis ioredis 实例
  * @param {boolean} [deps.startupChecks] 是否在 /readyz 中做真实探活（测试可关）
+ * @param {Function|null} [deps.fetchImpl] 出站 HTTP 实现（仅测试注入，用于**打桩极验**；生产传 null 用内置 fetch）
  */
-export async function buildApp({ config, logger, db, redis, startupChecks = true }) {
+export async function buildApp({ config, logger, db, redis, startupChecks = true, fetchImpl = null }) {
   const app = Fastify({
     loggerInstance: logger,
     // ✅ §13：X-Forwarded-For 可信代理白名单决定 client IP 的真实性（影响审计与 IP 追踪）
@@ -77,7 +78,7 @@ export async function buildApp({ config, logger, db, redis, startupChecks = true
 
   // --- 依赖注入（供路由/服务层通过 req.server.xxx 访问）-----------------------
   app.decorate('config', config);
-  app.decorate('deps', { db, redis, startupChecks });
+  app.decorate('deps', { db, redis, startupChecks, fetchImpl });
   /**
    * 面板会话的挂载点（middleware/authPanel.js 写、路由读）。
    * ⚠️ 必须**声明**装饰器：Fastify 靠它给 request 生成稳定的隐藏类，

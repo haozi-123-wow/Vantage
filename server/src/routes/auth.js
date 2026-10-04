@@ -22,8 +22,9 @@
  */
 
 import { createPanelAuth, clearSessionCookie, setSessionCookie } from '../middleware/authPanel.js';
-import { createLoginRateLimiter } from '../middleware/rateLimit.js';
+import { createCaptchaRateLimiter, createLoginRateLimiter } from '../middleware/rateLimit.js';
 import { createAuthService } from '../services/auth.service.js';
+import { createCaptchaService } from '../services/captcha.service.js';
 import { destroySession } from '../services/session.service.js';
 import { toPublicUser } from '../repositories/user.repo.js';
 import { AppError } from '../utils/errors.js';
@@ -52,6 +53,12 @@ const LOGIN_BODY_SCHEMA = {
     // ⛔ 上限不是摆设：超长输入会原样进入 Argon2 与审计 target，必须在这里掐断
     username: { type: 'string', minLength: 1, maxLength: 128 },
     password: { type: 'string', minLength: 1, maxLength: 128 },
+    /**
+     * 人机验证一次性凭证（➕ 可选，docs/api.md §4.1）。
+     * ⛔ 刻意**不进 `required`**："要不要"由服务端按失败计数判定；前端在没被要求时多带一个
+     *    token 也不该被拒（带了就在登录成功时被消费掉）。
+     */
+    captcha_token: { type: 'string', minLength: 1, maxLength: 128 },
   },
 };
 
@@ -155,6 +162,101 @@ const RECOVERY_VERIFY_RESPONSE_SCHEMA = {
   properties: { remaining_recovery_codes: { type: 'number' } },
 };
 
+// ---- 人机验证：docs/api.md §4.1、docs/geetest-captcha.md §6（两个提供方的契约差异）----
+//
+// 🔑 两个端点的请求/响应形状**按提供方分支**（下面三个常量在 registerAuthRoutes 里按
+//    `captcha.isGeetest()` 各选一个）。两个分支的差异是：
+//    · `selfbuilt`（自建滑块）：challenge 回两张 SVG；verify 收 `captcha_id` + `x` + `track`
+//    · `geetest`（极验 v4）    ：challenge 只回前端 `initGeetest4()` 需要的公开配置；
+//                                verify 收极验 `getValidate()` 的 4 个参数
+//    ⛔ 而**登录端点**（`/auth/login`）的形状在两个分支下**完全一致** —— 这正是"保持两步契约"
+//       换来的收益（docs/geetest-captcha.md §3.4）。
+
+/** `provider=selfbuilt`：取题响应（与 docs/slider-captcha-selfbuilt.md §5.1 一致，仅新增 `provider`） */
+const SLIDER_CHALLENGE_RESPONSE_SCHEMA = {
+  type: 'object',
+  required: ['provider', 'captcha_id', 'bg_svg', 'piece_svg', 'width', 'height', 'expires_in'],
+  additionalProperties: false,
+  properties: {
+    provider: { type: 'string' },
+    captcha_id: { type: 'string' },
+    bg_svg: { type: 'string' },
+    piece_svg: { type: 'string' },
+    width: { type: 'number' },
+    height: { type: 'number' },
+    expires_in: { type: 'number' },
+  },
+};
+
+/** `provider=selfbuilt`：验题请求体 */
+const SLIDER_VERIFY_BODY_SCHEMA = {
+  type: 'object',
+  required: ['captcha_id', 'x', 'track'],
+  additionalProperties: false,
+  properties: {
+    captcha_id: { type: 'string', minLength: 8, maxLength: 128 },
+    x: { type: 'number' },
+    /** ➕ 可选：仅横向滑动时前端可省（服务端只用横坐标判定，见 utils/slider.js 文件头第 2 条） */
+    y: { type: 'number' },
+    /** 轨迹 `[[t_ms, x], …]`：上限 200（⛔ 与 utils/slider.js 的 TRACK_MAX_POINTS 一致） */
+    track: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 200,
+      items: { type: 'array', minItems: 2, maxItems: 2, items: { type: 'number' } },
+    },
+  },
+};
+
+/**
+ * `provider=geetest`：取题响应。
+ * ⚠️ **没有 `expires_in`**：题目与答案由极验云端管理，服务端唯一能承诺的 TTL 是自己发的一次性凭证。
+ * ⚠️ **没有 `bg_svg`/`piece_svg`**：出题是极验的事。
+ */
+const GEETEST_CHALLENGE_RESPONSE_SCHEMA = {
+  type: 'object',
+  required: ['provider', 'captcha_id', 'product', 'language'],
+  additionalProperties: false,
+  properties: {
+    provider: { type: 'string' },
+    /** 极验 captcha_id（**公开**值；前端 `initGeetest4` 要用它） */
+    captcha_id: { type: 'string' },
+    product: { type: 'string' },
+    language: { type: 'string' },
+  },
+};
+
+/**
+ * `provider=geetest`：验题请求体 = 极验 `getValidate()` 的 4 个字段。
+ *
+ * ⛔ 刻意**不收 `captcha_id`**：服务端用自己的配置值。让调用方指定"用哪个验证 id"没有意义，
+ *    只会多一个可被拿来探测/伪造的输入面。
+ * ⚠️ 下面的长度上限是**防御性护栏**（挡畸形/超大 body），**不是**极验的契约；取值刻意宽松，
+ *    免得将来极验调整字段长度时把正常用户挡在门外。
+ */
+const GEETEST_VERIFY_BODY_SCHEMA = {
+  type: 'object',
+  required: ['lot_number', 'captcha_output', 'pass_token', 'gen_time'],
+  additionalProperties: false,
+  properties: {
+    lot_number: { type: 'string', minLength: 1, maxLength: 128 },
+    captcha_output: { type: 'string', minLength: 1, maxLength: 4096 },
+    pass_token: { type: 'string', minLength: 1, maxLength: 2048 },
+    gen_time: { type: 'string', minLength: 1, maxLength: 32 },
+  },
+};
+
+/** 两个提供方**共用**的验题成功响应（一次性凭证；形状与自建方案 §5.2 完全一致） */
+const CAPTCHA_VERIFY_RESPONSE_SCHEMA = {
+  type: 'object',
+  required: ['captcha_token', 'expires_in'],
+  additionalProperties: false,
+  properties: {
+    captcha_token: { type: 'string' },
+    expires_in: { type: 'number' },
+  },
+};
+
 const iso = (value) => value.toISOString();
 
 /**
@@ -168,7 +270,28 @@ export async function registerAuthRoutes(app) {
 
   const panel = createPanelAuth({ redis, config, logger: log });
   const loginRateLimit = createLoginRateLimiter({ redis, config, logger: log });
-  const service = createAuthService({ pool, redis, config, logger: log });
+  const captchaRateLimit = createCaptchaRateLimiter({ redis, config, logger: log });
+  // ⚠️ 两个服务共用同一份 redis/config：验证码服务负责"出题/验题/失败计数"，
+  //    认证服务只在登录路径上问它"这次要不要、token 对不对"（⛔ 不各自 new 一份）
+  const captcha = createCaptchaService({
+    redis,
+    pool,
+    config,
+    logger: log,
+    // 仅供测试注入（⛔ 测试绝不真连极验）；生产为 null → 提供方用 Node 内置 fetch
+    fetchImpl: deps.fetchImpl ?? null,
+  });
+  const service = createAuthService({ pool, redis, config, logger: log, captcha });
+
+  /**
+   * 两个验证端点的形状**按提供方分支**（本函数只在启动时跑一次，故这里是构造期常量）。
+   * ⛔ 不要改成"运行期再判断"：`additionalProperties: false` 的 schema 必须在注册时就定死，
+   *    否则响应里多出来的字段会被序列化时**静默丢掉** —— 少字段比报错更难查。
+   */
+  const captchaChallengeSchema = captcha.isGeetest()
+    ? GEETEST_CHALLENGE_RESPONSE_SCHEMA
+    : SLIDER_CHALLENGE_RESPONSE_SCHEMA;
+  const captchaVerifyBodySchema = captcha.isGeetest() ? GEETEST_VERIFY_BODY_SCHEMA : SLIDER_VERIFY_BODY_SCHEMA;
 
   const ipOf = (request) => prepareIp(request.ip).ip;
   const uaOf = (request) => {
@@ -191,6 +314,7 @@ export async function registerAuthRoutes(app) {
         password: request.body.password,
         ip: ipOf(request),
         ua: uaOf(request),
+        captchaToken: request.body.captcha_token ?? null,
       });
 
       setSessionCookie(reply, config, result.sid);
@@ -199,6 +323,44 @@ export async function registerAuthRoutes(app) {
         return { totp_required: true, csrf: result.csrf };
       }
       return { user: result.user, roles: result.roles, csrf: result.csrf, totp_required: false };
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // POST /api/v1/auth/captcha/challenge —— 取验证入口配置（✅ docs/api.md §4.1）
+  // 会话建立前即可调用（CSRF 天然放行，§1.2 ②）。
+  // ⚠️ 响应形状**按提供方分支**（构造期已定）：
+  //    · selfbuilt → 两张 SVG；答案只在 Redis，⛔ 不进响应
+  //    · geetest   → 只有前端 initGeetest4 要用的公开配置（极验云端出题，服务端没有答案）
+  // -------------------------------------------------------------------------
+  app.post(
+    '/api/v1/auth/captcha/challenge',
+    {
+      preHandler: [captchaRateLimit],
+      schema: { response: { 200: captchaChallengeSchema } },
+    },
+    async (request) => {
+      // 开关关闭 / 提供方未配置 / 外部服务处于熔断窗口（failMode=open）时都**当作端点不存在**（404）：
+      // ⛔ 不用 403，免得暴露"有这东西但被关了"。
+      // ⚠️ 这个判定由 services/captcha.service.js 的 `isUsable()` 统一做（它会抛 not_found），
+      //    路由层**刻意不再重复判一次** —— 否则每次取题都要多读一次设置与熔断标记。
+      return captcha.issueChallenge({ ip: ipOf(request) });
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // POST /api/v1/auth/captcha/verify —— 验题并发放一次性 captcha_token（绑定本次 IP）
+  // -------------------------------------------------------------------------
+  app.post(
+    '/api/v1/auth/captcha/verify',
+    {
+      preHandler: [captchaRateLimit],
+      schema: { body: captchaVerifyBodySchema, response: { 200: CAPTCHA_VERIFY_RESPONSE_SCHEMA } },
+    },
+    async (request) => {
+      // ⛔ 整个 `request.body` 原样交给提供方：两个提供方的参数形状差异**止步于**
+      //    `services/captcha/providers/*`，路由层不再知道"滑块"还是"极验"。
+      return captcha.verifyChallenge({ ip: ipOf(request), input: request.body });
     },
   );
 

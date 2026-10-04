@@ -48,7 +48,8 @@ web/
 │   │   ├── HostList.vue           # 主机列表（✅）
 │   │   ├── HostDetail.vue         # 主机详情（✅）
 │   │   ├── Alerts.vue             # 告警（✅）
-│   │   ├── Settings.vue           # 设置（✅）
+│   │   ├── Account.vue            # ➕ 我的账号（自助类：2FA / 我的会话 / SSO 绑定状态）
+│   │   ├── Settings.vue           # 设置（✅ 管理类，仅 admin）
 │   │   ├── Login.vue              # ➕ 登录 + 2FA 两步
 │   │   └── NotFound.vue           # ➕ 404
 │   ├── components/
@@ -96,7 +97,8 @@ web/
 | `/hosts` | `HostList.vue` | 需登录 | 主机列表（含 IP、漂移、Flapping、告警数） |
 | `/hosts/:id` | `HostDetail.vue` | 需登录 | 曲线 / 探活历史 / IP 时间线 / 进程 Top |
 | `/alerts` | `Alerts.vue` | 需登录 | 事件列表 + 规则管理 + 通道 + 静默窗口 |
-| `/settings` | `Settings.vue` | 需登录（`admin`） | Agent 管理（创建/**手动轮换**/禁用/吊销）、用户与权限（分配 `admin`/`user`，✅ 本轮决策）、公开视图开关、我的会话 |
+| `/account` | `Account.vue` | 需登录 | ✅ 2026-10-03 新增：**自助类**——二次验证（绑定/解绑/恢复码）、我的会话、SSO 绑定状态。⛔ 不能只让管理员进：服务端对 `2fa/*` 没有任何 admin 门槛，放开到本页才符合契约 |
+| `/settings` | `Settings.vue` | 需登录（`admin`） | **管理类**：Agent 管理（创建/**手动轮换**/禁用/吊销）、用户与权限（分配 `admin`/`user`，✅ 本轮决策）、系统设置项、公开视图开关、审计入口 |
 | `/:pathMatch(.*)*` | `NotFound.vue` | — | 404 |
 
 **路由守卫规则（➕ 建议）**
@@ -130,6 +132,17 @@ web/
 - 第二步提供 **「使用恢复码登录」** 链接（✅ 本轮决策：恢复渠道一）：切到恢复码输入 → `POST /api/v1/auth/2fa/recovery/verify` → 成功后同样重取 `me`；若响应 `remaining_recovery_codes ≤ 2`，前端强提示「恢复码快用完了，请到设置页重新生成」。
 - 失败提示：统一「用户名或密码错误」，**不区分**账号是否存在（与后端一致，`docs/api.md` §4.1）。
 - 登录限速触发（429）→ 展示「尝试过于频繁，请稍后再试」，带倒计时（读 `Retry-After`）。
+- 📝 **人机验证（极验 v4 官方按钮）** —— ✅ **后端（S5–S7）与前端（S8）均已落地（2026-10-03）**，⏳ 真机联调待 Owner；规范详见 `docs/geetest-captcha.md` §7，接口契约见 `docs/api.md` §4.1：
+  - **策略（不变）**：**首次登录不出现验证**；**密码错一次后**（401 带 `details.captcha_required`，或兜底的 400 `captcha_required`）→ 登录表单里**就地出现极验官方按钮**（不用重输密码、不用刷新）。
+  - **实现**：`onMounted` 即 `initGeetest4`（配置从 `POST /auth/captcha/challenge` 取：`provider`/`captcha_id`/`product`/`language`）并 `appendTo` 一个**默认隐藏**的 slot（满足官方「页面在加载时就初始化」的要求，行为数据从页面打开即可采集）；密码错后只需把容器显示出来 → 官方按钮出现 → 点击 → 官方验证弹窗 → `onSuccess` → `captchaVerify({lot_number, captcha_output, pass_token, gen_time})` → **自动重提登录**。
+  - ⛔ **三条禁令**：① 不在前端判定对错（前端判定 = 零防护）；② `captchaObj.getValidate()` 返回 `false` 时**不得提交**（会撞服务端 400 `schema_invalid`，用户却看到"验证失败"而永远过不去）；③ **不要**在 `onSuccess` 里 `reset()`（我们的 `captcha_token` 120s 内可复用、密码错不消费，用户**不必**重新验证）。
+  - ⚠️ **`challenge` 可能返回 404**：它同时表示「验证码被关闭」「提供方未配置」「极验处于熔断窗口」。三种情况都应当**直接提交登录、不显示任何验证入口**（此时服务端也不会要求 `captcha_token`）—— 这正是 fail-open 在前端应有的样子（`docs/geetest-captcha.md` §16.2 偏差 3）。
+  - ⚠️ 极验验证窗**内部文案不受本站 i18n 控制**（由 `language` 参数切换，且图片内文字不随语言变）；我们只控制按钮周围的提示。错误码新增 `error.captcha_unavailable`（503），⚠️ 其 message 被服务端折叠为通用文案，**必须按 `error.code` 匹配**。
+  - ⚠️ 两个端点（`/auth/captcha/challenge`、`/auth/captcha/verify`）虽在**会话建立前**调用，但仍属 `/api/v1/*`，须走 `api/private.js`（`skipCsrf`）；⛔ 不要因为 `/login` 被标了公开域就改用 `api/public.js`（`router/index.ts:89` 已按 `to.name !== 'login'` 处理该例外）。
+  - ⚠️ **现状（S8 已落地）**：两个组件都在仓库里，**由运行时的 `provider` 决定用哪个**（⛔ 不按构建期 env 硬编码，否则换部署要重新构建前端）：
+    - `provider='geetest'` → `web/src/components/GeetestCaptcha.vue`（+ `web/src/utils/geetest.ts` 动态注入 `gt4.js`）——⚠️ **常驻挂载**、容器默认隐藏（官方要求"页面加载时就初始化"）；
+    - `provider='selfbuilt'` → `web/src/components/SliderCaptcha.vue`（S1–S4，**完整保留**，仍是内网/离线部署与回滚目标）——只在服务端确实要求时才挂载。
+    - `Login.vue` 在 `onMounted` 调一次 `POST /auth/captcha/challenge` 拿 `provider` 与配置；⚠️ 该请求 **404 不阻塞登录**（直接提交、不显示验证入口）。
 - ⛔ 本期**不提供** SSO / OIDC 登录入口（`users` 表已预留 OIDC 字段，对接放在后续里程碑，见 `docs/api.md` §4.1）；若将来接入，按钮形态与本地登录并列，仍复用同一套 `sid` 会话。
 
 ### 4.3 `HostList.vue` — 主机列表（✅ §5.4 需登录）
@@ -170,15 +183,17 @@ web/
 
 ### 4.6 `Settings.vue` — 设置（✅ §5.4、§6.1、§18.1）
 
+> ✅ **2026-10-03 拆分（Owner 拍板「方案 A」）**：本页只放**管理类**区块；**自助类**（二次验证、我的会话、SSO 绑定状态）移到「我的账号」页 `/account`（`Account.vue`，见 §3 路由表）。理由：本页仅 `admin` 可达，而服务端对自助类**不设 admin 门槛**（`server/src/routes/auth.js` 的 `2fa/*` 只有 `requireSession` / `requireFullSession` + `requireCsrf`，无 `requireRole`）——把自助类放在本页，会让普通用户（`role=user`）在完整态下**永远无法自助开启 2FA**；受限态被守卫特批进绑定页只是「被策略强制绑定」这一条路径，不构成自助入口。
+
 | 区块 | 内容 |
 |---|---|
 | Agent 管理 | 列表（状态/最后上报/**凭证年龄 `credential_age_days`**）；**创建** → 结果面板同时给出：① **一键安装命令（含 `VANTAGE_KEY`，复制按钮）** ② 交互式/stdin 与 `--key-file` 两种更安全形式的命令（折叠在次要位置）③ `agent_key`/`agent_secret` 明文（独立字段 + 复制按钮）；全部标注「仅显示一次，离开即不可再取」，并展示安全提示（env 形式会进 shell history、建议 `history -d` 或改用 `--key-file`）——✅ 本轮修订决策 #37，见 `docs/api.md` §4.4；**手动轮换**（✅ 本轮决策：无并存过渡，旧凭证立即失效 → 必须弹窗强提示「需立即上机替换 key 文件并 reload，否则该机将判离线」+ 主机名二次确认，返回结构与创建一致）；**禁用/启用**；**吊销** |
 | 轮换提醒 | ✅ 本轮决策：`rotate_recommended` 为真时列表打「建议轮换」徽标（附 `credential_age_days`）；**阈值取后端下发的 `rotate_policy.days`**（默认 90 天，⛔ 前端不硬编码，`notify=false` 时仅保留徽标）；顶部可显示汇总提示条「N 台主机凭证已超过建议轮换周期」 |
 | 面板账号 | ✅ 本轮决策：权限**暂时两级** `admin` / `user`；本页提供**最小集**——用户列表 + 分配 `role` + 启用/禁用 + 重置该用户 2FA（见下一行）；⛔ 本期不做改密/删除用户 UI（改密走用户自助或 DB 运维）；「新建用户」建议保留（否则无法增加管理员） |
-| 二次验证 (2FA) | ✅ 本轮决策：**面板自助绑定**——「绑定」展示 `otpauth_uri` 二维码 + secret 文本（提示一次性）+ 输入验证码确认；「解绑」需密码二次确认；展示当前状态与绑定时间；**恢复码**：绑定成功即展示 10 个一次性码（强制提示保存）、显示剩余数量、支持重新生成（旧码立即作废）；若 `security.require_2fa=true` 且账号未绑定 → 登录后强制跳本页（受限态只能访问本页，`docs/api.md` §4.1） |
+| 二次验证 (2FA)（→ `/account`） | ✅ 本轮决策：**面板自助绑定**——「绑定」展示 `otpauth_uri` 二维码 + secret 文本（提示一次性）+ 输入验证码确认；「解绑」需密码二次确认；展示当前状态与绑定时间；**恢复码**：绑定成功即展示 10 个一次性码（强制提示保存）、显示剩余数量、支持重新生成（旧码立即作废）；若 `security.require_2fa=true` 且账号未绑定 → 登录后强制跳「我的账号」（`/account`，受限态只能访问该页，`docs/api.md` §4.1） |
 | 用户 2FA 重置 | ✅ 本轮决策（恢复渠道二）：面板账号列表提供「重置该用户 2FA」按钮（仅 `admin`）——二次确认（输入用户名）→ 调 `POST /api/v1/users/{id}/2fa/reset`（清绑定 + 作废恢复码 + 踢该用户下线）；UI 须明确提示「该用户下次登录将只用密码」 |
-| 我的会话 | `SessionList`：当前会话信息（创建时间/最后活动/IP/UA）+「登出全部设备」（✅ 决策 #32） |
-| SSO（占位） | ➕ 预留入口：展示当前账号的 SSO 绑定状态（未绑定/已绑定 + `oidc_issuer`）；本期仅展示占位与说明，不做 OIDC 登录（✅ 本轮决策） |
+| 我的会话（→ `/account`） | `SessionList`：当前会话信息（创建时间/最后活动/IP/UA）+「登出全部设备」（✅ 决策 #32） |
+| SSO（占位，→ `/account`） | ➕ 预留入口：展示当前账号的 SSO 绑定状态（未绑定/已绑定 + `oidc_issuer`）；本期仅展示占位与说明，不做 OIDC 登录（✅ 本轮决策） |
 | 系统设置项 | ✅ 本轮决策：统一渲染 `GET /api/v1/settings` 返回的**白名单项**（`public_view.enabled`、`security.require_2fa`、`credential_rotate.reminder_days`、`credential_rotate.notify`），按后端下发的**类型与默认值**渲染控件与文案，⛔ 前端不硬编码 key 列表/默认值；保存走 `PATCH /api/v1/settings`（仅 `admin`），成功后提示「已立即生效」（无需重启） |
 | 公开视图 | 总开关 `public_view.enabled`（✅ §5.4，读写走上面的 `/api/v1/settings`）；✅ 已定（本轮）：**默认开启** → 本页需醒目展示当前状态（开/关徽标 + 生效范围说明）+ 「一键关闭」（二次确认，提示将影响免登录访问）；并提示公开接口已按 IP 严格限流、内容已脱敏 |
 | 审计 | 可选入口：`GET /api/v1/audit-logs`（需登录，✅ §5.4） |

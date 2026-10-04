@@ -22,6 +22,14 @@ export const SETTING_DEFAULTS = Object.freeze({
   'security.require_2fa': false,
   'credential_rotate.reminder_days': 90,
   'credential_rotate.notify': true,
+  /**
+   * ✅ 滑动验证码（docs/api.md §4.1 / docs/slider-captcha-selfbuilt.md §8.2）。
+   * `enabled` 默认 **true**：本轮需求就是"出现密码错误即引入人机验证"。
+   * `after_failures` 默认 **1**：一次密码错之后就要（可配 1–10）。
+   * ⛔ 首次登录永远不受影响——此时两个失败计数器都还是 0。
+   */
+  'security.login_captcha.enabled': true,
+  'security.login_captcha.after_failures': 1,
 });
 
 /** key 是否在白名单内（M3 的 PATCH 用它拒绝未知 key → 400 unknown_setting） */
@@ -96,4 +104,33 @@ export async function getSettingBool(redis, runner, key, { ttlS, logger } = {}) 
 /** 使缓存失效（M3 的 PATCH /settings 落地时**必须**调用，✅ R16：变更立即生效、不必重启） */
 export async function invalidateSettingsCache(redis) {
   await redis.del(keys.settingsCache);
+}
+
+/**
+ * 读一个整数设置项（当前唯一调用方：`security.login_captcha.after_failures`）。
+ *
+ * ⚠️ 与 `getSettingBool` 同一口径：类型不对 → **回退默认值** + warn（⛔ 不抛错、不把登录打成 500）。
+ * ⚠️ 额外做**夹取**：越界值夹到 `[min, max]` 而不是直接采用——`after_failures=0` 会让
+ *    "首次登录就要滑块"（与需求相反），`=100` 则等于把保护关掉，两者都属"静默失效"。
+ */
+export async function getSettingInt(redis, runner, key, { min, max, ttlS, logger } = {}) {
+  if (!isKnownSettingKey(key) || typeof SETTING_DEFAULTS[key] !== 'number') {
+    throw new Error(`getSettingInt 只接受整数型白名单 key：${key}`);
+  }
+  const all = await readSettings(redis, runner, { ttlS, logger });
+  const raw = all[key];
+  let value = SETTING_DEFAULTS[key];
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    value = Math.trunc(raw);
+  } else if (raw !== undefined) {
+    logger?.warn?.({ key, value: raw }, '整数设置项的类型不正确，已回退默认值');
+  }
+
+  const lower = Number.isFinite(min) ? min : value;
+  const upper = Number.isFinite(max) ? max : value;
+  const clamped = Math.min(Math.max(value, lower), upper);
+  if (clamped !== value) {
+    logger?.warn?.({ key, value, clamped }, '整数设置项超出允许范围，已夹取到边界值');
+  }
+  return clamped;
 }

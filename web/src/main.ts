@@ -55,8 +55,9 @@ configurePrivateClient({
   },
   onTotpSetupRequired: () => {
     auth.markTotpSetupRequired()
-    if (router.currentRoute.value.name !== 'settings') {
-      void router.replace({ name: 'settings' })
+    // 绑定入口在「我的账号」页（自助类），不是管理员设置页
+    if (router.currentRoute.value.name !== 'account') {
+      void router.replace({ name: 'account' })
     }
   },
   onRateLimited: (error) => {

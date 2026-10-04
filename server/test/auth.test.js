@@ -199,11 +199,18 @@ test('login：密码错 / 账号不存在 / 已禁用 → 同码同文，⛔ 无
     assert.equal(res.statusCode, 401);
     const body = res.json();
     assert.equal(body.error.code, 'invalid_credentials');
-    assert.equal(body.error.details, undefined, '⛔ details 不得携带区分信息');
+    // ⛔ 原断言是 `details === undefined`。引入人机验证后失败响应会带 `details.captcha_required`
+    //    （docs/api.md §4.1、docs/slider-captcha-selfbuilt.md §5.3），断言必须按**意图**改写：
+    //    它的意图是"details 里不得出现能区分账号是否存在的字段"，而 `captcha_required` 由
+    //    IP / 提交用户名的失败计数算出、与账号是否存在无关 → 收敛为"只允许这一个键"。
+    assert.deepEqual(Object.keys(body.error.details ?? {}), ['captcha_required']);
     assert.equal('user' in body, false);
   }
   assert.equal(wrongPw.body.error.message, noUser.body.error.message);
   assert.equal(wrongPw.body.error.message, disabled.body.error.message);
+  // 三种失败情形的 details 必须**完全一致**——不一致本身就是新的枚举侧信道
+  assert.deepEqual(wrongPw.body.error.details, noUser.body.error.details);
+  assert.deepEqual(wrongPw.body.error.details, disabled.body.error.details);
 
   // 审计：三条失败都留痕，但 reason 恒同词（审计可被 user 角色读取，⛔ 不能写答案进去）
   const failures = await auditRows('auth.login_failed');
@@ -235,6 +242,10 @@ test('login：已绑定 TOTP → totp_required:true 且 ⛔ 不带 user/roles；
 });
 
 test('login：限流（✅ 成功与失败都计数）——第 11 次 429 + Retry-After，⛔ 无账号线索', async () => {
+  // ⚠️ 本用例只验限流：先关掉人机验证。默认阈值 1 —— 错一次之后第 2 次起会先撞
+  //    400 `captcha_required`（docs/api.md §4.1），下面断言的 401 就不再成立。
+  await run(`INSERT INTO settings (key, value) VALUES ('security.login_captcha.enabled', 'false'::jsonb)`);
+
   const limit = CONFIG.rateLimit.loginPerWindow;
   for (let i = 0; i < limit; i += 1) {
     const res = await app.inject({

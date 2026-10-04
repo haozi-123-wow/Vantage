@@ -20,9 +20,11 @@ export default {
     publicStatus: 'Public status',
     hosts: 'Hosts',
     alerts: 'Alerts',
+    account: 'My account',
     settings: 'Settings',
     login: 'Sign in',
     logout: 'Sign out',
+    enterConsole: 'Open console',
   },
   theme: {
     label: 'Theme',
@@ -55,6 +57,64 @@ export default {
     hint: 'The link may be stale or mistyped.',
     back: 'Back to public status',
   },
+  captcha: {
+    // Human verification: self-built slider (docs/slider-captcha-selfbuilt.md §7.4) + GeeTest v4
+    // (docs/geetest-captcha.md §7.4). ⛔ No hardcoded copy in components; ⚠️ the text *inside* the
+    // GeeTest window is not controlled by this app (it follows the `language` sent by the server).
+    title: 'Security check',
+    hint: 'Drag the slider to fit the piece',
+    required: 'Multiple sign-in failures detected. Please complete the check.',
+    loading: 'Loading human verification…',
+    retry: 'Try again',
+    refresh: 'New challenge',
+    cancel: 'Cancel',
+    expired: 'The challenge expired; a new one has been issued',
+    failed: 'Verification failed, please try again',
+    suspicious: 'Suspicious pointer track, please try again',
+    tooManyAttempts: 'Too many failures on this challenge; a new one has been issued',
+    unavailable: 'Verification is temporarily unavailable, please try later',
+    verified: 'Verified',
+    // —— GeeTest v4 only (the self-built branch never references these) ——
+    vendorFailed: 'The verification widget failed to load. Retry later; contact an administrator if it persists.',
+    closed: 'You closed the verification window; click the verification button again to complete it.',
+    ariaLabel: 'Slider verification: press left/right arrow keys to move 5 pixels, Enter to submit',
+  },
+  // Two-factor authentication (self-service binding)
+  twoFactor: {
+    sectionTitle: 'Two-factor authentication (2FA)',
+    restrictedTitle: 'Security policy requires binding 2FA first',
+    restrictedHint:
+      'Until binding is complete, the rest of the console is unavailable (only this page and sign-out are allowed).',
+    missingCsrfTitle: 'This session has no write token, so binding cannot proceed',
+    missingCsrfHint:
+      'In the restricted state the server does not return a CSRF token (it is lost on page refresh), so sign in again and bind immediately on this page.',
+    relogin: 'Sign in again',
+    setupUnavailable: 'Could not fetch a key. Please retry.',
+    setupFailedRetry: 'Fetch a new key',
+    scanHint:
+      'Scan the QR code with an authenticator app (Google Authenticator, 1Password, …); if you cannot scan, type the key below manually.',
+    manualSecret: 'Manual key (Base32)',
+    secretOnce: 'The key and QR code are shown once and never again after binding succeeds.',
+    codeLabel: '6-digit code from the authenticator',
+    missingCode: 'Please enter the 6-digit code.',
+    enable: 'Complete binding',
+    reissue: 'Use a different key',
+    alreadyBound: 'This account already has 2FA bound. To re-bind, sign in with a recovery code or ask an administrator to reset it.',
+    invalidCodeResent: 'Incorrect code; a new key has been generated — please scan it again and retry.',
+    boundTitle: '2FA is bound',
+    boundHint:
+      'Sign-in requires the 6-digit code from your authenticator. If the device is lost, use a recovery code or ask an administrator to reset 2FA.',
+    recoveryTitle: 'Save these 10 recovery codes now',
+    recoveryHint:
+      'Each recovery code works only once; you cannot view them again after leaving this page (they are your way back in if the device is lost).',
+    recoveryCount: 'Remaining: {count}',
+    recoveryAcknowledge: 'I have saved them',
+    copy: 'Copy',
+    copyAll: 'Copy all',
+    copied: 'Copied',
+    copyFailed: 'Copy failed; please select the text and copy manually.',
+    qrAlt: '2FA binding QR code',
+  },
   view: {
     publicStatus: {
       title: 'Public status',
@@ -63,6 +123,23 @@ export default {
     login: {
       title: 'Sign in',
       hint: 'Password plus second factor (recovery code supported) in a single route.',
+      username: 'Username',
+      password: 'Password',
+      submit: 'Sign in',
+      totp: 'Verification code',
+      totpHint: 'Enter the 6-digit code from your authenticator app.',
+      verify: 'Verify',
+      recovery: 'Recovery code',
+      recoveryHint: 'Enter an unused recovery code (single use).',
+      useRecovery: 'Use a recovery code',
+      usePassword: 'Back to password sign-in',
+      missingCredentials: 'Please fill in username and password.',
+      missingTotp: 'Please enter the 6-digit verification code.',
+      missingRecovery: 'Please enter a recovery code.',
+      recoveryLow: 'Recovery codes are almost used up ({count} left); regenerate them on the My account page.',
+      captchaFallback:
+        'If you cannot complete the human verification, wait a few minutes and retry (the failure counter resets when the window expires), or ask an administrator to reset 2FA.',
+      rateLimited: 'Retry in {seconds}s',
     },
     hostList: {
       title: 'Hosts',
@@ -76,9 +153,15 @@ export default {
       title: 'Alerts',
       hint: 'Requires sign-in: events, controlled threshold rules, channels and silences.',
     },
+    account: {
+      title: 'My account',
+      hint: 'Self-service: two-factor authentication (bind / unbind / recovery codes); sessions and SSO binding status will live here too.',
+      pending: 'Sessions and SSO binding status will land here in a later increment.',
+    },
     settings: {
       title: 'Settings',
-      hint: 'Requires sign-in (admin): agents, accounts and 2FA, system settings, sessions.',
+      hint: 'Requires sign-in (admin): agents, accounts and permissions, system settings, public view.',
+      accountLink: 'Manage two-factor authentication on the My account page',
     },
   },
   error: {
@@ -90,6 +173,12 @@ export default {
     range_too_large: 'Time range too large; narrow it and retry.',
     expr_not_allowed: 'Free-form expressions are not supported.',
     invalid_totp: 'Invalid verification code.',
+    // Human verification (docs/api.md §1.3 / self-built §5.4 / GeeTest §6.2)
+    captcha_required: 'Complete the human verification first.',
+    captcha_invalid: 'Human verification failed; please try again.',
+    // ⚠️ Only when GeeTest is unreachable and failMode=closed (the default is open): 5xx messages are
+    //    collapsed into generic copy by the server, so the frontend MUST match on error.code.
+    captcha_unavailable: 'Human verification is temporarily unavailable; retry later or contact an administrator.',
     signature_invalid: 'Signature verification failed.',
     timestamp_skew: 'Request timestamp skew too large.',
     agent_unknown_or_disabled: 'Agent unknown or disabled.',

@@ -25,18 +25,13 @@
 
 import { AppError } from '../utils/errors.js';
 import { keys } from '../utils/redisKeys.js';
+import { FIXED_WINDOW_LUA } from '../utils/redisCounter.js';
 
 /** 窗口长度（秒）：§1.4 的建议阈值以「每分钟」表述，故窗口固定 60s */
 export const AGENT_RATE_WINDOW_S = 60;
 
-/** 原子「计数 + 首次设 TTL」，返回 [当前计数, 剩余秒数] */
-const FIXED_WINDOW_LUA = `
-local n = redis.call('INCR', KEYS[1])
-if n == 1 then
-  redis.call('EXPIRE', KEYS[1], ARGV[1])
-end
-return { n, redis.call('TTL', KEYS[1]) }
-`;
+// ⚠️ 固定窗口的 Lua 已抽到 `utils/redisCounter.js`（唯一来源，登录失败计数共用同一段语义）：
+//    ⛔ 不要在本文件里再写一份——那正是"两边 TTL 口径漂移"的来源。用法见下面的 eval 调用。
 
 /**
  * 创建 Agent 限流的 preHandler。
@@ -125,6 +120,53 @@ export function createLoginRateLimiter({ redis, config, logger }) {
       logger?.warn({ ip: request.ip, count, limit }, '登录被限流');
       throw new AppError('rate_limited', {
         message: `尝试过于频繁，请稍后再试（上限 ${limit} 次 / ${windowS}s）`,
+        retryAfterS,
+        details: { limit, window_s: windowS },
+      });
+    }
+  };
+}
+
+/**
+ * 创建**滑块验证码**限流的 preHandler（`ratelimit:captcha:<ip>`）。
+ *
+ * 依据：docs/api.md §1.4（30 次/分钟）、docs/slider-captcha-selfbuilt.md §5.1/§5.2、§6.2。
+ *
+ * 🔑 为什么**独立成桶**而不复用登录桶：滑块"换一张图"是**正常操作**（图看不懂、手滑拖歪），
+ *    若与登录共用，用户换两次图就把登录额度吃掉了，转而在真正的登录上撞 429——典型的自伤。
+ *    两桶独立后，取题/验题被限流**不影响**登录请求本身的额度。
+ *
+ * ⛔ Redis 不可用时拒绝服务（与本文件其它限流器同款取舍）：没有限流的滑块等于
+ *    "可以无限取题 + 无限试位"，而容差 5px / 宽 320px 只要约 60 次试位就能命中（自建方案 §6.2）。
+ *
+ * @param {{ redis: import('ioredis').Redis, config: object, logger: object }} deps
+ */
+export function createCaptchaRateLimiter({ redis, config, logger }) {
+  const limit = config.rateLimit.captchaPerMinute;
+  const windowS = 60;
+
+  return async function captchaRateLimit(request, reply) {
+    const key = keys.rateLimitCaptcha(request.ip);
+
+    let count;
+    let ttl;
+    try {
+      [count, ttl] = await redis.eval(FIXED_WINDOW_LUA, 1, key, windowS);
+    } catch (err) {
+      logger?.error({ err, ip: request.ip }, '滑块限流检查失败（Redis 不可用）');
+      throw new AppError('upstream_unavailable', { cause: err, details: { dependency: 'redis' } });
+    }
+
+    const remaining = Math.max(0, limit - count);
+    const retryAfterS = Math.max(1, Number(ttl) || windowS);
+    reply.header('X-RateLimit-Limit', String(limit));
+    reply.header('X-RateLimit-Remaining', String(remaining));
+    reply.header('X-RateLimit-Reset', String(Math.floor(Date.now() / 1000) + retryAfterS));
+
+    if (count > limit) {
+      logger?.warn({ ip: request.ip, count, limit }, '滑块取题/验题被限流');
+      throw new AppError('rate_limited', {
+        message: `操作过于频繁，请稍后再试（上限 ${limit} 次 / ${windowS}s）`,
         retryAfterS,
         details: { limit, window_s: windowS },
       });
