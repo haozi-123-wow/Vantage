@@ -1,0 +1,24 @@
+# 由 vantage.sh install 生成；字段全表见 docs/agent.md §8。
+# ⚠️ Agent 对未知字段一律拒绝：加字段前先查文档，别凭记忆写。
+center:
+  url: "@CENTER_URL@"
+  timeout: 10s
+agent:
+  id: "@AGENT_ID@"
+  key_file: "@KEY_FILE@"
+  secret_file: "@SECRET_FILE@"
+host:
+  alias: "@HOST_ALIAS@"
+# —— 以下均为缺省值，按需打开（reload 后热加载）——
+# log:
+#   level: info                           # debug/info/warn/error；format: text|json
+#   # file 留空 = 走 stdout（systemd 收进 journald）；日志去处见 A-T11（Q5）
+# collect:
+#   disk:    { enabled: true, interval: 60s }
+#   process: { enabled: true, interval: 60s, top_n: 10 }
+# probes:
+#   - { name: "site-health", type: http, url: "https://example.com/healthz", expect_status: [200], interval: 30s }
+# filters:
+#   disk: { exclude_fs: ["tmpfs","devtmpfs","overlay"] }
+# resource:
+#   gomemlimit_mb: 48

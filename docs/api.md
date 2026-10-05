@@ -207,6 +207,7 @@
 | 403 | `totp_required` | 已绑 2FA 但未过第二步（`totp_pending` 受限态，见 §4.1.0） |
 | 403 | `totp_setup_required` | `security.require_2fa=true` 且该账号未绑定（`setup_required` 受限态，见 §4.1.0） |
 | 403 | `csrf_invalid` | 写请求缺 `X-CSRF-Token` 或不匹配（⛔ 不销毁会话） |
+| 403 | `origin_denied` | WebSocket 握手的 `Origin` 不在白名单内（§5.1；⛔ 与 `csrf_invalid` 分开：前者防跨站 WS 劫持、后者防 CSRF，排障时要查的东西不同） |
 | 404 | `not_found` | 资源不存在 / 路由未命中 |
 | 409 | `conflict` | 与当前状态冲突（含：2FA 已绑定还 setup、`require_2fa=true` 时自助解绑） |
 | 409 | `already_exists` | 唯一约束冲突（如 Agent `name` 重名、用户名已存在） |
@@ -1462,9 +1463,15 @@ URL → **只留主机名**（⛔ 去掉路径/查询串/端口）；`host:port`
 
 - ✅ 握手校验 `Origin` 白名单（防跨站 WS 劫持）；`/ws/live` 校验 Cookie 会话有效性。
 - ✅ 反代需放行 `Upgrade` / `Connection: upgrade`，且读超时 > 保活间隔。
-- ✅ 限流：`ratelimit:ws:<ip>`。
+- ✅ 限流**分两层，缺一不可**（✅ 2026-10-05 定）：
+  - **握手速率**：桶 `ratelimit:ws:<ip>`，默认 **30 次/分钟**（`RATELIMIT_WS_HANDSHAKE_PER_MINUTE`）—— 防"反复连-断"刷服务端握手与鉴权开销；
+  - **并发连接数**：每 IP 默认 **3 条**（`RATELIMIT_WS_CONCURRENT_PER_IP`）—— 防"一个 IP 挂一堆连接把内存吃光"。
+  ⚠️ 只做其中一个都会留下明显缺口（只限速率挡不住"慢慢连 1000 条"，只限并发挡不住连断风暴）。
+  ⚠️ 并发数是**进程内**计数（按已登记连接）：多实例部署时实际上限 = 每实例 N 条。之所以不落 Redis —— 连接数这种"随连接生灭"的计数用 INCR/DECR 极易在进程崩溃时泄漏，**泄漏的后果是某个 IP 被永久挡住**，比"上限略宽"严重得多。
+- ✅ Origin 不匹配 → 403 `origin_denied`（⛔ 不复用 `csrf_invalid`：两者防的是不同攻击，合并会让排障时分不清该查 Cookie 还是查 `PUBLIC_ORIGIN`）。
+  ⚠️ **请求不带 `Origin` 时放行**：Origin 校验唯一能挡的是**浏览器**（防"别的站点用受害者的 Cookie 偷偷开一条 WS"），而脚本/curl 本来就能伪造任何头，对它们校验毫无意义 —— 这种情况交给会话鉴权把关。
 
-### 5.2 消息格式（❓ 具体编码待拍板；语义 ✅ §18.2；决议索引 `docs/api-status.md` §5.2）
+### 5.2 消息格式（✅ 2026-10-05 定稿；语义来自 ✅ §18.2；决策记录见 `docs/api-status.md` §4.9）
 
 **消息类型总表**（⛔ 客户端→服务端**只允许** `subscribe` 一种应用层消息）
 
@@ -1477,18 +1484,28 @@ URL → **只留主机名**（⛔ 去掉路径/查询串/端口）；`host:port`
 **连接建立后服务端立即推送全量快照**
 
 ```json
-{ "type": "snapshot", "ts": 1758800000123,
-  "hosts": [ { "id": "...", "status": "online", "snapshot": { "...": "..." } } ],
-  "summary": { "total": 5, "online": 4, "offline": 1, "alerts": 0 } }
+{ "type": "snapshot", "ts": 1758800000123, "channels": ["metrics","status","probes","alerts"],
+  "hosts": [ { "id": "...", "slug": "...", "status": "online", "snapshot": { "...": "..." } } ],
+  "summary": { "total": 5, "online": 4, "offline": 1, "disabled": 0, "alerts": { "critical": 0, "warn": 0, "info": 0 } },
+  "updated_at": "2026-10-05T12:00:00.000Z" }
 ```
+
+- ✅ 已定：**`hosts[]` 就是对应 REST 列表端点的 `items`**（面板用 `GET /api/v1/hosts` 的形状、公开用 `GET /api/public/hosts` 的形状），`summary` 同理（`GET /api/v1/summary` / `/api/public/summary`）。
+  理由：前端同一张表格两个数据来源，形状不一致就得写两套渲染。
+- ✅ 已定：连接**先登记、快照发出后才允许收增量**（服务端内部有个"就绪"标志）—— §5.3「先 snapshot 后 delta」由**构造**保证，⛔ 不靠"快照先发、广播后到"的时序运气（那在负载高时会偶发"先收增量、后收快照"，前端表现为列表被增量覆盖成残缺状态且难复现）。
 
 **客户端 → 服务端（✅ 已定：应用层只允许 `subscribe`）**
 
 ```json
-{ "type": "subscribe", "channels": ["hosts","probes","alerts"], "agents": ["*"] }
+{ "type": "subscribe", "channels": ["metrics","status","probes","alerts"], "agents": ["*"] }
 ```
 
-- ✅ 已定：**应用层只接受 `subscribe`**（`agents: ["*"]` 或具体 id 数组；`channels` 缺省＝全部）。它只影响本连接收到哪些 delta，⛔ 不携带任何指令语义。
+- ✅ 已定：**应用层只接受 `subscribe`**（`agents: ["*"]` 或具体 id 数组，≤ 200 个；`channels` 缺省**或空数组**＝全部）。它只影响本连接收到哪些 delta，⛔ 不携带任何指令语义。
+- ✅ **`channels[]` 的取值集合就此定死为四个**（面板连接）：`metrics` / `status` / `probes` / `alerts`；公开连接**只能订 `status`**。
+  - ⛔ **没有 `hosts` 频道**：主机是管理员在面板上创建的，**不会因为 Agent 上报而"冒出来"** —— 它属于**快照**，不是增量。主机列表"动起来"靠的是 `status`（某台上/下线）与 `metrics`（某台数字变了）。契约初稿的订阅示例里写过 `hosts`，那是个错误（照抄它的前端会**漏订 `metrics`/`status`，实时功能全哑但连接看起来完全正常**）。
+  - ⏳ `alerts` **暂时收不到任何东西**（告警引擎 = M3，尚无可生产者）。它在白名单里，属于"合法但安静"。
+- ⛔ **未知频道 / `agents` 元素不是 UUID / 超过 200 个 → 立即关连接（`1008`）+ 记审计 `ws.protocol_violation`**，⛔ 不静默忽略。
+  理由：静默忽略会把"`metrics` 拼成 `metric`"变成**静默失效**（连接正常、日志空白、就是不刷新）；这与"默认拒绝、大声失败"的既有口径一致（同一条规则也作用于非 `subscribe` 的消息）。
 - ✅ **保活走协议层帧**：服务端定时发送 WebSocket **ping 帧**（RFC 6455），浏览器**自动回 pong 帧**（JS 不参与，无需应用层消息）；服务端用 `ws` 库的 `pong` 事件判活。这样客户端→服务端的应用层消息面收敛为**一条**。
 - ⛔ 收到任何非 `subscribe` 的应用层消息 → 立即关闭连接（`1008 policy violation`）并记审计；这是「WS 不得成为下发通道」在协议层的最小化落实（✅ §18.3）。
 
@@ -1504,6 +1521,21 @@ URL → **只留主机名**（⛔ 去掉路径/查询串/端口）；`host:port`
 
 > 服务端→客户端**不做**应用层 ping；保活由协议层帧完成（见上），因此这条消息类型表里**不存在** `ping`/`pong`。
 
+- ✅ `metrics` / `status` / `probes` **三个频道已经在发**（生产者：`ingest.service.js` 的上报落库扇出、`cron.service.js` 的离线扫描扇出 —— 两者走同一 Redis 频道 `live:metrics`、同一形状）。⛔ WS 层对面板连接**原样转发、不翻译**：生产者的形状由各自的测试钉住，在 WS 层重新编码就等于有了第二份实现，两边迟早漂移。
+- ⏳ `alerts` **目前没有生产者**（告警引擎是 M3）。它留在白名单里，属于"合法但安静"。
+- ⚠️ **`/ws/public` 的 `delta` 形状与上表不同**（这是刻意的不对称）：
+
+  ```json
+  { "type": "delta", "channel": "status", "ts": 1758800015000,
+    "host": { "slug": "...", "name": "web-01", "display_name": null, "status": "offline",
+              "last_seen_ago": "3 分钟前", "last_seen_at": "2026-10-05T11:57:00.000Z" } }
+  ```
+
+  - `host` = **公开列表条目的形状**（服务端收到 `status` delta 后**重新取一次公开列表**、只推那一台）。
+  - ⛔ 绝不原样转发：原始 delta 里的指标全名带 `device`/`mount`，转发给匿名访客等于把磁盘与挂载点全泄露出去。公开侧也**只推 `status`**（不推 `metrics`/`probes`/`alerts`）。
+  - ⚠️ 没有公开连接时服务端**完全不做这次查库**（先判"有没有公开连接"再取数）；公开列表本身还有 10s 响应级缓存。
+  - ⚠️ 公开视图（`public_view.enabled`）在连接存续期间被关闭 → 服务端**主动断开**全部公开连接（与 REST 侧的 404 同义，⛔ 不 fail-open）。
+
 ### 5.3 语义约束
 
 | 项 | 约定 |
@@ -1512,7 +1544,8 @@ URL → **只留主机名**（⛔ 去掉路径/查询串/端口）；`host:port`
 | 顺序 | 先 `snapshot` 后 `delta`；掉线期间的 delta **不补**（✅ 无断点续传） |
 | 保活 | 服务端定时发**协议层 ping 帧**；超时未收到协议层 `pong` 帧即断开并清理（✅ 已定） |
 | 重连 | 前端指数退避重连，重连成功即**重新拉全量快照**（✅） |
-| 脱敏 | `/ws/public` 的 `snapshot`/`delta` 与公开 REST 一致（无 IP/内网、仅别名+状态+指标概览） |
+| 脱敏 | `/ws/public` 的 `snapshot` **就是** `GET /api/public/hosts` 的形状；`delta` 是"重新取一次公开列表、只推那一台"的脱敏条目（见 §5.2）。⛔ **绝不原样转发** `live:metrics` 的 payload —— 里面的指标全名带 `device`/`mount`，转发给匿名访客等于把磁盘与挂载点全泄露出去 |
+| 保活方向 | 服务端发协议层 ping 帧；⛔ 客户端⛔ 不必也不该发应用层心跳（浏览器**看不到** ping/pong 帧，前端⛔ 不得把"长时间没有应用层消息"当成断线去重连 —— 安静是常态，真断线由 `onclose`/`onerror` 负责） |
 | 多实例 | 因走 Pub/Sub，core 多实例/多 worker **零改动**（✅） |
 
 ---

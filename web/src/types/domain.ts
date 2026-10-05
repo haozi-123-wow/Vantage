@@ -212,19 +212,34 @@ export interface RealtimeHost {
   [key: string]: unknown
 }
 
+/**
+ * WS `snapshot` 的 `hosts[]` 元素：✅ **就是对应 REST 列表端点的 items**（同一形状、同一函数）。
+ * 面板连接是 `HostListItem`（有 `id`），公开连接是 `PublicHost`（只有 `slug`、⛔ 无内部 UUID）。
+ * ⚠️ 前端因此用 `id ?? slug` 做键 —— 两个频道的键空间不同，⛔ 不要混用。
+ */
+export type WsHostEntry = RealtimeHost | PublicHost
+
+/**
+ * 实时汇总（WS `snapshot.summary`）：与 `GET /api/public/summary` / `GET /api/v1/summary` 同形。
+ * ⚠️ `alerts` 是**三个严重级的对象**（契约示例如此），⛔ 不是单个数字。
+ */
 export interface RealtimeSummary {
   total: number
   online: number
   offline: number
-  alerts: number
+  disabled?: number
+  alerts: { critical: number; warn: number; info: number }
 }
 
 /** 服务端 → 客户端：连接建立后立即推送的全量快照 */
 export interface WsSnapshotMessage {
   type: 'snapshot'
   ts: number
-  hosts: RealtimeHost[]
+  /** 本连接订阅到的频道（服务端回填） */
+  channels?: string[]
+  hosts: WsHostEntry[]
   summary: RealtimeSummary
+  updated_at?: string
 }
 
 /** 服务端 → 客户端：增量（单机/单指标粒度） */
@@ -240,7 +255,19 @@ export interface WsDeltaMessage {
   event?: { id: number | string; rule_id?: string; severity?: AlertSeverity; status?: string }
 }
 
-export type WsMessage = WsSnapshotMessage | WsDeltaMessage
+export type WsMessage = WsSnapshotMessage | WsDeltaMessage | WsPublicDeltaMessage
+
+/**
+ * ⚠️ `/ws/public` 的 delta 形状**刻意与面板不同**（docs/api.md §5.2）：
+ * 只推 `status`，载荷是"重新取一次公开列表、只推那一台"的**脱敏条目**；
+ * ⛔ 绝不原样转发 `live:metrics`（原始指标全名带 `device`/`mount`，转发给匿名访客等于泄露磁盘与挂载点）。
+ */
+export interface WsPublicDeltaMessage {
+  type: 'delta'
+  ts: number
+  channel: 'status'
+  host: PublicHost
+}
 
 /** ⛔ 客户端 → 服务端只允许 `subscribe`（docs/api.md §5.2：应用层消息面收敛为一条） */
 export interface WsSubscribeMessage {

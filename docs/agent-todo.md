@@ -169,22 +169,23 @@ E2E 3/3 PASS（WrongSecret / RealCenter / IdempotentReplay）；`--once` 上报 
 
 ## 4. P3 —— M2 交付物（Agent 上线的必要条件）
 
-### A-T10　实现 `vantage.sh` ⬜
+### A-T10　实现 `vantage.sh` 🟡（代码已落地，待真机验证）
 
 | 项 | 内容 |
 |---|---|
-| 依据 | `docs/agent.md` §12.1（子命令表）、§12.2（安装参数三种形式） |
+| 依据 | `docs/agent.md` §12.1（子命令表）、§12.2（安装参数三种形式）；设计见 **`docs/agent-install-script.md`**（已定稿） |
 | 验收 | ① 子命令齐：`install` / `upgrade` / `uninstall`（默认保留配置+key+日志并打印保留路径，`--purge` 才彻底删且需交互确认）/ `start` / `stop` / `restart` / `status` / `reload`（= `systemctl reload vantage-agent`）；② `install` 下载二进制后**校验 sha256**（能签名更好）→ 创建低权用户 → 写入受限配置目录 → 安装 unit → 启动；③ `upgrade` 替换二进制但**保留配置**；④ `status` 输出「运行中/版本/最后上报时间/最近错误码/生效配置摘要」 |
 | 红线 | ⛔ 任何子命令都不得接受 `--key <明文>`；⛔ 脚本落地 key 文件后立即 `unset VANTAGE_KEY` 并清理临时缓冲；⛔ 日志与 `--help` 不得出现 key/secret |
+| 状态（2026-10-05） | 🟡 **代码已落地**：`agent/deploy/{vantage.sh,vantage-agent.service,config.minimal.yaml,README.md}` + `build-release.sh`/`publish-release.sh`；本机校验（`tests/shell-lint.js`，带自测）全绿。⛔ **真机/容器验证未做** —— 按设计 §12.2 的 11 条负例由 Owner 执行；步 0（生成发布密钥对、打 tag、发三源）也须 Owner 自己终端执行 |
 
-### A-T11　实现 systemd unit + 非 root 加固 ⬜
+### A-T11　实现 systemd unit + 非 root 加固 🟡（模板已落地，待真机打磨）
 
 | 项 | 内容 |
 |---|---|
 | 依据 | `docs/agent.md` §9（systemd 加固表）、§7（`ReloadSignal=SIGHUP`） |
 | 验收 | ① unit 含 `User=vantage`、`NoNewPrivileges=true`、`ProtectSystem=strict`、`ProtectHome=true`、`PrivateTmp=true`、`ReadWritePaths=<数据目录>`、`ReloadSignal=SIGHUP`；② 不监听任何端口、不写系统目录（与 §9 一致）；③ 实测 `systemctl reload vantage-agent` 触发 SIGHUP 并热重载成功，且**校验失败的配置无法把进程带进半配置状态**（改坏 `config.yaml` 后 reload，旧配置仍生效 + 日志有 `config_reload_failed`） |
 
-### A-T12　对齐三种 key 传递形式 ⬜
+### A-T12　对齐三种 key 传递形式 🟡（代码已落地，待真机验证）
 
 | 项 | 内容 |
 |---|---|
@@ -356,3 +357,4 @@ E2E 3/3 PASS（WrongSecret / RealCenter / IdempotentReplay）；`--once` 上报 
 | 2026-09-28 | 首次建立待办清单：A-T01…A-T24，来源为 `docs/agent-status.md` §6/§7/§8 的偏差、未实现项与风险 |
 | 2026-10-01 | P0/P1 完成：A-T01/A-T02/A-T03/A-T04/A-T05/A-T23/A-T24 置 ✅（提交 `1c6dd9a` + `ab83d7f`）；`go vet` / `go test ./...` 首次全绿；新增 A-T25（§3 数据源列 gopsutil 口径收窄）；第 1/2 轮执行顺序标注完成情况。改动细节见 [`docs/agent-changes-2026-10-01.md`](agent-changes-2026-10-01.md) |
 | 2026-10-01(晚) | **A-T09 真机 E2E ✅**（Debian 12 经堡垒机：3/3 PASS + `--once` 真实上报落库，PG 18.4 兼容实测，红线检查通过）；登记并完成 A-T26（`--once` 预热轮修复，`90e81e8`，⚠️ 待推送）；登记 A-T27（package-lock.json 未入库）。上线最小集合仅剩部署侧 A-T10～T13 |
+| 2026-10-05 | **A-T10/A-T11/A-T12 代码落地（🟡 待真机验证）**：设计文档 `docs/agent-install-script.md` 定稿（含 Q1–Q12 决策台账）→ `agent/deploy/` 交付 `vantage.sh`（POSIX sh，子命令齐、源链回退、验签+sha256、凭证三形式、冒烟上报前移、首次安装回滚、接管旧机）+ `vantage-agent.service` + `config.minimal.yaml` + `tests/static-assert.sh` + `tests/shell-lint.js`（本机等价校验，带自测）+ `build-release.sh`（含 `--keygen`）+ `publish-release.sh`（签名+三源+回读自检）+ `README.md`；`.gitignore` 增加私钥兜底。⚠️ 本机 MSYS `sh.exe` 被沙箱命名管道限制挡住，`sh -n`/静态断言与 11 条负例**待 Owner 在真机/容器执行**（设计 §12.2）；步 0（生成密钥对、打 tag、发三源）同样待 Owner；A-T13（运维文档）未开始 |

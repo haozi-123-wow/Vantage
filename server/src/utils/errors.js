@@ -56,6 +56,13 @@ export const ERROR_CODES = Object.freeze({
   // 强制绑定策略下的受限态（docs/api.md §4.1.1 ②③）：未绑定 TOTP 且 require_2fa=true
   totp_setup_required: { status: 403, message: '按安全策略要求，请先绑定二次验证（TOTP）' },
   csrf_invalid: { status: 403, message: 'CSRF 校验失败' },
+  /**
+   * WebSocket 握手的 `Origin` 白名单校验（docs/api.md §5.1）。
+   * ⚠️ 与 `csrf_invalid` 分开：两者防的是**不同**的攻击 —— CSRF 防"浏览器自动带 Cookie 的写请求"，
+   *    而这里防的是"别的站点用受害者的 Cookie 偷偷开一条 WS"（跨站 WS 劫持）。
+   *    合并成一个 code 会让排障时分不清该去查 Cookie 还是查 PUBLIC_ORIGIN。
+   */
+  origin_denied: { status: 403, message: '请求来源不在白名单内（Origin 校验失败）' },
 
   // 404
   not_found: { status: 404, message: '资源不存在' },

@@ -8,7 +8,7 @@
 | 设计 | **v0.8 定稿**（§15 技术决策表共 59 条）→ [`Vantage-DESIGN-v0.7.md`](Vantage-DESIGN-v0.7.md)（⚠️ 文件名保留 `v0.7` 以维持既有引用，**内容已是 v0.8**） |
 | 代码 | **中心 M1 + M1.5 已落地**：`server/` 可跑通「Agent 上报 → gzip 解压 → HMAC 验签 → 幂等 → 单事务落库 → 分区/降采样/保留期清理」 |
 | 代码 | 🚧 **Go Agent 主体完成**：采集/探活/签名/上报/配置/热重载 M1–M4 核心代码已落地，`go test ./...` 全绿，并与中心跑通**跨语言契约测试**（`contracts/`）；M2 部署侧（安装脚本、systemd）待补，进度见 [`docs/agent-status.md`](docs/agent-status.md) |
-| 未开工 | Vue 面板（`web/`）——目录尚未创建，契约已定稿：`docs/frontend.md` |
+| 代码 | 🚧 **Vue 面板（`web/`）已开工**：公开总览 `/`、主机列表 `/hosts`、主机详情 `/hosts/:id`（含 ECharts 历史曲线 + 探活历史 + IP 时间线 + 进程 Top）已接后端 API；告警页/设置页仍是占位页。进度与体积实测见 [`web/README.md`](web/README.md) |
 | 许可 | **AGPL-3.0**（决策 #28；⚠️ 仓库尚未放入 `LICENSE` 文件，正式开源前需补） |
 
 ---
@@ -49,7 +49,7 @@
 |---|---|---|---|
 | 被监控端 | `vantage-agent` | **Go 1.22+** 单文件静态二进制，极低占用、**非 root 可运行** | 🚧 M1–M4 代码完成（部署脚本待补，见 `docs/agent-status.md`） |
 | 中心服务 | `vantage-core` | **Node.js ≥ 22 + Fastify 5** | ✅ M1 / M1.5 |
-| Web 面板 | Vantage Console | **Vue 3 + ECharts + Element Plus**（按需引入） | 未开工 |
+| Web 面板 | Vantage Console | **Vue 3 + ECharts + Element Plus**（按需引入） | 🚧 公开页 / 主机列表 / 主机详情（含曲线）已落地；告警、设置待做 |
 | 主存储 | PostgreSQL | **16**（原始时序层按天分区） | ✅ 8 个迁移 |
 | 缓存 | Redis | **7**（限流 / nonce / 会话 / 幂等 / Pub/Sub 扇出） | ✅ |
 | 实时 | WebSocket | `/ws/public`（免登录脱敏）、`/ws/live`（需登录） | ⏳ M3 |
@@ -74,7 +74,7 @@ Vantage/
 ├── deploy/
 │   └── docker-compose.yml       # 本地/单机 PG 16 + Redis 7（端口只绑 127.0.0.1）
 ├── agent/                       # 🚧 vantage-agent（Go，M1–M4 代码完成；部署脚本待补）
-└── web/                         # ⏳ Vantage Console（未创建）
+└── web/                         # 🚧 Vantage Console（公开页 / 主机列表 / 主机详情已落地，见 web/README.md）
 ```
 
 > ⛔ `server/src/` 内不得出现任何向 Agent 下发配置/命令的代码路径；该约束并入安全清单复核。
@@ -194,7 +194,7 @@ VANTAGE_LIVE_TEST=1 npm test
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| M1 | Agent 采 6 类指标 + 中心收/存 + 免登录公开状态页 | 中心侧 ✅；Agent 侧采集/组包/上报 ✅（公开页待做） |
+| M1 | Agent 采 6 类指标 + 中心收/存 + 免登录公开状态页 | 中心侧 ✅；Agent 侧采集/组包/上报 ✅；公开状态页 ✅（`web/src/views/PublicStatus.vue`，2026-10-05） |
 | M1.5 | 分区维护 / 降采样 1m·5m / 保留期清理 / 单实例锁 | ✅ 提前落地（分区提前量有硬死线） |
 | M2 | 鉴权（key+HMAC）+ TLS + schema/限流 + 面板登录 + 公开 API + Agent 安装脚本 | ⏳（Agent 侧鉴权/TLS 代码 ✅；安装脚本、systemd、面板登录未开工） |
 | M3 | 告警引擎（阈值/离线/IP 变化/探活）+ 多通道通知 + WS | ⏳ |

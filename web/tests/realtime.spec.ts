@@ -6,24 +6,47 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { SERIES_BUFFER_LIMIT, useRealtimeStore } from '@/store/realtime'
-import type { RealtimeHost, WsDeltaMessage, WsSnapshotMessage } from '@/types/domain'
+import type {
+  PublicHost,
+  RealtimeHost,
+  WsDeltaMessage,
+  WsPublicDeltaMessage,
+  WsSnapshotMessage,
+} from '@/types/domain'
 import { RingBuffer } from '@/utils/ring'
 
 function host(id: string, status: RealtimeHost['status'] = 'online'): RealtimeHost {
   return { id, status, snapshot: { 'cpu.usage': 1 } }
 }
 
-function snapshot(hosts: RealtimeHost[], ts = 1_000): WsSnapshotMessage {
+/** 公开侧条目：只有 `slug`，⛔ 无内部 UUID（docs/api.md §5.2） */
+function publicHost(slug: string, status: PublicHost['status'] = 'online'): PublicHost {
+  return {
+    slug,
+    name: `host-${slug}`,
+    status,
+    snapshot: { cpu_pct: 1, mem_pct: 2, disk_pct: 3, net_rx_bps: 4, net_tx_bps: 5 },
+    probes: { up: 1, down: 0 },
+    last_seen_ago: null,
+    last_seen_at: null,
+  }
+}
+
+function snapshot(hosts: Array<RealtimeHost | PublicHost>, ts = 1_000): WsSnapshotMessage {
   return {
     type: 'snapshot',
     ts,
     hosts,
-    summary: { total: hosts.length, online: hosts.length, offline: 0, alerts: 0 },
+    summary: { total: hosts.length, online: hosts.length, offline: 0, alerts: { critical: 0, warn: 0, info: 0 } },
   }
 }
 
 function delta(partial: Omit<WsDeltaMessage, 'type'>): WsDeltaMessage {
   return { type: 'delta', ...partial }
+}
+
+function publicDelta(host: PublicHost, ts = 2_000): WsPublicDeltaMessage {
+  return { type: 'delta', channel: 'status', ts, host }
 }
 
 beforeEach(() => {
@@ -38,7 +61,7 @@ describe('snapshot：整表替换', () => {
 
     store.applySnapshot(snapshot([host('a2')], 2_000))
     expect(store.hostList).toHaveLength(1)
-    expect(store.hostList[0]?.id).toBe('a2')
+    expect((store.hostList[0] as RealtimeHost).id).toBe('a2')
     expect(store.summary?.total).toBe(1)
     expect(store.lastMessageAt).toBe(2_000)
   })
@@ -52,7 +75,7 @@ describe('delta：按序列全名就地更新', () => {
 
     store.applyDelta(delta({ ts: 3_000, channel: 'metrics', agent_id: 'a1', metrics: { 'cpu.usage': 12.4 } }))
 
-    expect(store.hosts.a1?.snapshot?.['cpu.usage']).toBe(12.4)
+    expect((store.hosts.a1 as RealtimeHost).snapshot?.['cpu.usage']).toBe(12.4)
     expect(store.series['cpu.usage']?.points).toEqual([[3_000, 12.4]])
   })
 
@@ -86,7 +109,7 @@ describe('delta：按序列全名就地更新', () => {
 
     store.applyDelta(delta({ ts: 3_000, channel: 'metrics', agent_id: 'a2', metrics: { 'cpu.usage': 99 } }))
 
-    expect(store.hosts.a2?.snapshot?.['cpu.usage']).toBe(99) // 当前值照常更新
+    expect((store.hosts.a2 as RealtimeHost).snapshot?.['cpu.usage']).toBe(99) // 当前值照常更新
     expect(store.series).toEqual({}) // 但不进曲线缓冲
   })
 
@@ -133,6 +156,32 @@ describe('断线 / 重连：空洞不可续', () => {
 
     store.trackAgent('a2')
     expect(store.series).toEqual({})
+  })
+})
+
+describe('公开频道（/ws/public，形状与面板不同）', () => {
+  it('快照按 slug 建键（⛔ 公开侧没有内部 UUID）', () => {
+    const store = useRealtimeStore()
+    store.applySnapshot(snapshot([publicHost('abc12345')]))
+
+    expect(store.hostList).toHaveLength(1)
+    expect(Object.keys(store.hosts)).toEqual(['abc12345'])
+  })
+
+  it('公开 delta 是"整条脱敏条目替换"，不是 agent_id 增量', () => {
+    const store = useRealtimeStore()
+    store.applySnapshot(snapshot([publicHost('abc12345')]))
+    store.applyDelta(publicDelta(publicHost('abc12345', 'offline')))
+
+    expect((store.hosts.abc12345 as PublicHost).status).toBe('offline')
+    expect(store.lastMessageAt).toBe(2_000)
+  })
+
+  it('summary 与 REST 同形：alerts 是三个严重级的对象', () => {
+    const store = useRealtimeStore()
+    store.applySnapshot(snapshot([publicHost('abc12345')]))
+
+    expect(store.summary?.alerts).toEqual({ critical: 0, warn: 0, info: 0 })
   })
 })
 

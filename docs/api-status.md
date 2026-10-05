@@ -32,9 +32,10 @@
 | 添加 Agent（`POST /api/v1/agents`：签发凭证，明文仅一次） | ✅ 已落地（2026-10-04） | `api.md` §4.4；决策见本文件 §4.7 |
 | Agent 管理的其余端点（列表 / 详情 / PATCH / rotate / disable｜enable / revoke / rotate-reminder-test） | ⏳ 未实现（M3；两处待定稿见 §4.7） | `api.md` §4.4 |
 | 告警 / 通道 / 静默 / 设置 / 用户 / 审计查询 | ⏳ 未实现（M3） | `api.md` §4.5–§4.10 |
-| WebSocket（`/ws/*`） | ⏳ 未实现（M3） | `api.md` §5 |
+| WebSocket（`/ws/public` · `/ws/live`） | ✅ 已落地（2026-10-05；消息格式与频道集合已定稿） | `api.md` §5；决策见本文件 §4.9 |
 
 **当前可用端点数 = 29**：3 个探针 + 2 个 Agent 上报端点 + 13 个认证会话端点 + 4 个公开状态端点 + 6 个私有状态端点 + 1 个 Agent 管理端点（`api.md` §4.1/§3.2/§4.2/§4.4）。
+**另有 2 个 WebSocket 频道**（`/ws/public`、`/ws/live`，✅ 2026-10-05 落地，`api.md` §5），不计入上面的 REST 端点数。
 **未实现端点当前调用会命中 404 `not_found`**（路由未注册 → §1.3 统一错误信封）。
 
 ---
@@ -429,6 +430,31 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 
 ---
 
+### 4.9 WebSocket 落地（`/ws/public` · `/ws/live`，2026-10-05）
+
+**交付**：`src/ws/hub.js`（与 socket 无关的订阅中心）、`src/ws/fanout.js`（Redis 订阅 → 广播）、`src/routes/ws.js`（握手四道闸门 + 快照 + `subscribe` + 保活）、`app.js` 接入 `@fastify/websocket`、`agent.repo.js::findAgentPublicRef()`、`rateLimit.js::createWsRateLimiter()`、错误码 `origin_denied`；新增 env `RATELIMIT_WS_HANDSHAKE_PER_MINUTE` / `WS_KEEPALIVE_INTERVAL_S` / `WS_MAX_CLIENTS` 三项（`RATELIMIT_WS_CONCURRENT_PER_IP` 早已存在但一直没人用）。
+**测试**：`server/test/ws.hub.test.js`（15 例，纯单测）+ `server/test/ws.api.test.js`（8 例，**真开端口、真连接**）。
+
+| # | 决议 | 理由（一句话） |
+|---|---|---|
+| **H1** | `channels[]` 定死为 **`metrics` / `status` / `probes` / `alerts`**，**删掉 `hosts`** | 原契约自相矛盾：订阅示例写 `["hosts","probes","alerts"]`，而实际发的是 `metrics`/`status`/`probes` ⇒ **照抄示例的前端会漏订 `metrics`/`status`，实时功能全哑、但连接看起来完全正常**。`hosts` 不是增量频道（主机是管理员建的，不会因上报而"冒出来"） |
+| **H2** | 未知频道 / `agents` 非法 → **立即关连接 1008 + 审计**，⛔ 不静默忽略 | 静默忽略会把"`metrics` 拼成 `metric`"变成静默失效；与"非 `subscribe` 消息也关连接"同一套口径 |
+| **H3** | `snapshot.hosts[]` = **对应 REST 列表端点的 items**（面板 `/api/v1/hosts`、公开 `/api/public/hosts`），`summary` 同理 | 前端同一张表格两个来源；形状不一致就要写两套渲染 |
+| **H4** | 公开连接**只能订 `status`**，且它的 delta **不是原样转发**，而是"重新取一次公开列表、只推那一台"的脱敏条目 | `live:metrics` 的 payload 里指标全名带 `device`/`mount`，原样转发 = 把磁盘/挂载点泄露给匿名访客（公开 REST 是刻意做了设备名泛化的）；`status` delta **只在上下线切换时才有**，所以这次重取很便宜，且没有公开连接时**完全跳过** |
+| **H5** | 公开视图被关闭 → **主动断开**全部公开连接（与 REST 的 404 同义），⛔ 不 fail-open | 与 `publicView.js` 的三条口径逐条一致；"开关读不到就放行"是最坏的默认值 |
+| **H6** | 限流**分两层**：握手速率（`ratelimit:ws:<ip>`，30/分钟，走既有固定窗口 Lua）+ 每 IP **并发连接数**（默认 3） | 只做一层都有明显缺口；并发数用**进程内**计数而非 Redis INCR/DECR（崩溃泄漏会让某个 IP 被**永久**挡住，比上限略宽严重得多） |
+| **H7** | 缺 `Origin` 时**放行**；带了才校验（配了 `PUBLIC_ORIGIN` 用它，否则按请求推导同源） | Origin 校验唯一能挡的是**浏览器**；脚本/curl 本来就能伪造任何头，对它们校验毫无意义 |
+| **H8** | 保活走**协议层 ping 帧**；`snapshot` **之后**才允许收增量（hub 的 `ready` 标志） | "先 snapshot 后 delta"由**构造**保证 —— 快照要 async 查库，广播由 Redis 回调驱动，两者之间有个真实窗口，靠时序运气会在高负载下偶发"先收增量、后收快照" |
+| **H9** | 快照取数前**先同步**登记连接并挂 `error`/`close` 监听 | ⚠️ **这条是真踩到的 bug**：监听晚挂，快照期间断连就会让 socket 的 `'error'` 没有监听者 → Node 升级成未捕获异常（生产里 = `uncaughtException` → **进程退出**）。集成测试里稳定复现为一个 `read ECONNRESET` |
+
+**实现期踩到的坑（都已加注释/防线）**：
+
+1. **前端"静默即断线"是错的**（`web/src/api/ws.ts`，已修）：浏览器**不把协议层 ping 帧暴露给 JS**，而那段代码把"45 秒没收到应用层消息"当成断线去 `socket.close()` → **安静但健康的连接每 45 秒重连一次**并挂 `degraded` 横幅。更糟的是触发时机恰好是"所有机器都离线"（那时一条 delta 都没有）。改为：只在面板频道、阈值放宽到 90s、且**只提示不关连接**（真断线交给 `onclose`/服务端 terminate）。
+2. **`app.inject()` 测不了 WebSocket**（inject 走假 socket，没有协议升级这条路）⇒ 把所有"该发给谁"的判断下沉到 `hub.js` 做纯单测，真实连接测试只留握手与两条端到端路径。
+3. **测试里探测握手状态码不能用 `fetch`**：undici 把 `Connection: Upgrade` 列为禁止头，直接抛 `InvalidArgumentError`；改用 `node:http`，并**必须 `agent: false`** —— Node 18+ 的全局 agent 默认 keep-alive，复用被服务端关掉的空闲连接会报一个与断言无关的 `ECONNRESET`。
+
+---
+
 ## 5. 待拍板索引
 
 > 规则（2026-10-04）：`api.md` 正文**只写已定契约**；下列条目尚未拍板，实现到对应模块前必须逐条定稿。⚠️ 为了不让 M2/M3 的端点失去可读的草案，提案表格仍留在 `api.md` 端点旁边，但**状态以本表为准**（未拍板 = 随时可改）。
@@ -463,7 +489,7 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 | `GET /api/v1/audit-logs`（§4.8） | 查询参数集合与 `detail` 脱敏口径 |
 | 用户管理端点（§4.9） | 除 `2fa/reset` 外全部为建议：请求/返回字段集在 M3 定稿 |
 | `PATCH /api/v1/settings`（§4.10） | 变更后是否向在线 WS 广播 `delta{channel:"settings"}` |
-| `/ws/*` 消息编码（§5.2） | 具体编码为建议（语义已定）：`snapshot`/`subscribe`/`delta` 的字段集合与 `channels[]` 取值集合 |
+| `/ws/*` 消息编码（§5.2） | ✅ 2026-10-05 **已定稿并落地**：`channels[]` = `metrics`/`status`/`probes`/`alerts`（⛔ 无 `hosts`，它属于快照）；公开连接只能订 `status`；未知频道/非 `subscribe` → 关连接 1008 + 审计；`snapshot.hosts[]` = 对应 REST 列表端点的 items；保活走协议层 ping 帧 —— 见本文件 §4.9 |
 | 公开域细节（§3.2） | ✅ 2026-10-04 已定：`last_seen_ago` 分级文案 + `last_seen_at` 分钟级取整、响应级缓存 `PUBLIC_CACHE_TTL_S`（默认 10s）、**设备名泛化口径**（`磁盘 N`/`网卡 N`/`GPU N`）、`target_host` 脱敏口径（域名留、私网 IP → `内网地址`、公网 IP 留）—— 见 §4.6.1 E6/E7 |
 
 ---
@@ -472,6 +498,7 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 
 | 日期 | 变更 |
 |---|---|
+| 2026-10-05 | **WebSocket 落地**（`/ws/public` · `/ws/live`，M3 第一块）：新增 `src/ws/hub.js`（与 socket 无关的订阅中心）、`src/ws/fanout.js`（订阅 `live:metrics` → 广播；生产者早就在发，本层**原样转发不翻译**）、`src/routes/ws.js`、`createWsRateLimiter()`、`findAgentPublicRef()`、错误码 `origin_denied`；`app.js` 接入 `@fastify/websocket` 并管起扇出生命周期。**关键口径**：`channels[]` 定死 `metrics`/`status`/`probes`/`alerts`（**删掉 `hosts`** —— 原订阅示例与真实生产者对不上，照抄会让前端漏订 `metrics`/`status` 而实时功能全哑）、未知频道即关连接 1008、公开连接只能订 `status` 且 **delta 是重新取的脱敏条目**（⛔ 不转发带 `device`/`mount` 的原始 payload）、`snapshot.hosts[]` 复用 REST 列表形状、限流分"握手速率 + 每 IP 并发"两层、缺 Origin 放行（校验只对浏览器有意义）。决议 H1–H9 见 §4.9。⚠️ 记两条真坑：① 连接登记必须先于任何 `await` 挂 `error`/`close` 监听（否则快照期间的断连会变成**未捕获异常**）② 前端把"静默"当断线去重连是错的（浏览器看不到协议层 ping 帧） |
 | 2026-10-05 | **历史曲线接口落地**（`GET /api/v1/hosts/{id}/metrics`，M2 收尾）：新增 `services/metricQuery.service.js`、`metric.repo.js` 的 `METRIC_STEPS` + 两个只读查询、`routes/hosts.js` 的 `GET /hosts/:id/metrics`；新增错误码 `too_many_series`；`api.md` §4.3 的 ❓ 全部定稿。**关键口径**：档位 `30s`/`1m`/`5m`（**删掉 `15s`** —— 上报周期是 30s）、最长 **30 天**且不做跨表再聚合、`step=auto` = "选最细的档使点数 ≤2000"（恰好复现 5 个预设按钮）、两道闸门（展开后 ≤20 条序列、总数 ≤5 万点）超限 400 **不截断**、缺失桶不补 0、`from`/`to` 向外对齐到桶边界后回显。决议 G1–G10 见 §4.8。⚠️ 记一条实现坑：**`metrics` 不能用 `split(',')` 切分**（全名的维度分隔符就是逗号），只能按花括号外的逗号切，已留回归用例 |
 | 2026-10-04 | **添加 Agent 接口落地**（`POST /api/v1/agents`）：新增 `routes/agents.js`、`services/agentAdmin.service.js`、`agent.repo.js::insertAgent()`；新增 env `AGENT_INSTALL_SCRIPT_URL`（未配置则不给安装命令，⛔ 不给占位符假命令）；`install_hint` 由契约初稿的 `string` **改为对象**（三段命令 + 风险提示 + warnings）；一键命令补上 `VANTAGE_SECRET`（原 `agent.md` §12.1 漏写，已同步）；新增审计动作 `agent.create`；决议 F1–F9 与两处待定稿见 §4.7；前端 `agentsApi.create()` 与类型已就位（`vue-tsc` 通过）。⚠️ 记一条测试坑：PGlite 适配器必须给 `pool.connect()`（上报落库走 `withTransaction`），且清理顺序要按外键（`agent_ip_history` 等 RESTRICT） |
 | 2026-10-04 | **状态类接口收尾（第二批）**：新增 `GET /api/v1/summary`（契约新增）、`/api/v1/hosts/{id}`、`/{id}/probes`、`/{id}/ip-history`、`/{id}/processes`、`GET /api/public/hosts/{slug}/now`、`GET /api/public/probes`；新增 `utils/time.js`、`utils/ip.js::isPrivateAddress()`、两个公开缓存子键（`database.md` §7 已登记）；决议 E1–E10 见 §4.6.1；`api.md` §3.2/§4.2 全部改为 ✅ 并写死契约（清理了三处旧草案形状）；前端类型声明同步（`vue-tsc` 通过）。⚠️ 记一条教训：**fast-json-stringify 对任意键对象默认序列化成 `{}`**，透传 JSONB 必须写 `additionalProperties: true` |

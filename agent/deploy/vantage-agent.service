@@ -1,0 +1,42 @@
+[Unit]
+Description=Vantage Agent - 主机指标采集与上报
+Documentation=https://github.com/haozi-123-wow/Vantage
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@AGENT_USER@
+Group=@AGENT_USER@
+ExecStart=@AGENT_BIN@ --config @CONF_FILE@
+ReloadSignal=SIGHUP
+Restart=always
+RestartSec=5s
+TimeoutStopSec=10s
+
+# —— 加固（docs/agent.md §9）——
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# ⛔ 不放宽任何 capability（ICMP 权限属 Agent 运行侧，见 A-T13；脚本不提供开关）
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=@DATA_DIR@
+
+# —— 资源 ——
+TasksMax=64
+# MemoryHigh / MemoryMax：⏭ 移交 A-T11（Q3）——等真机内存曲线后再定
+# OOMPolicy=continue
+
+[Install]
+WantedBy=multi-user.target

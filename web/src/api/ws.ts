@@ -32,8 +32,14 @@ export interface RealtimeConnection {
 const BASE_RECONNECT_MS = 1_000
 const MAX_RECONNECT_MS = 30_000
 const JITTER_RATIO = 0.2
-/** 超过该时长未收到任何帧/消息即判为 degraded（服务端 ping 帧也会走到 onmessage） */
-const STALE_AFTER_MS = 45_000
+/**
+ * 超过该时长未收到任何**应用层**消息 → 标记 `degraded`（⛔ 不关连接，见 `startStaleWatch`）。
+ *
+ * ⚠️ 阈值不能小：面板频道的增量来自"有机器在上报"（默认 30s 一次），
+ *    但**所有机器都离线时一条 delta 都不会有** —— 那正是最需要看清状态的时刻，
+ *    却恰好是消息面最安静的时刻。公开频道更极端：`status` delta 只在上下线切换时才发。
+ */
+const STALE_AFTER_MS = 90_000
 const STALE_CHECK_MS = 5_000
 
 function wsUrl(channel: WsChannel): string {
@@ -85,11 +91,19 @@ export function createRealtimeConnection(
 
   function startStaleWatch(): void {
     if (staleTimer !== undefined) window.clearInterval(staleTimer)
+    // ⛔ 公开频道不做静默判定：它的 `status` delta 只在上下线切换时才有，
+    //    "长时间没有消息"是完全正常的（`snapshot` 之后可能几十分钟一片安静）。
+    if (channel === 'public') return
+
     lastFrameAt = Date.now()
     staleTimer = window.setInterval(() => {
       if (Date.now() - lastFrameAt <= STALE_AFTER_MS) return
+      // ⚠️ 只**提示**，⛔ 绝不 `socket.close()`：
+      //    浏览器**不会**把协议层的 ping/pong 帧暴露给 JS —— 服务端每 30s 发的 ping 帧
+      //    在 `onmessage` 里是看不见的。所以"没收到应用层消息"完全可能只是"这段时间没有增量"。
+      //    真断线由 `onclose` / `onerror` 负责（服务端在收不到 pong 时会 terminate，
+      //    TCP 层也会超时）—— 在这里主动关连接只会把健康连接变成每 90 秒一次的重连风暴。
       handlers.onStatus('degraded')
-      socket?.close() // 交由 onclose 走退避重连
     }, STALE_CHECK_MS)
   }
 

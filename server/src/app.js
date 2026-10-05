@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 
 import compress from '@fastify/compress';
 import cookie from '@fastify/cookie';
+import websocket from '@fastify/websocket';
 import Fastify from 'fastify';
 
 import { registerAgentReportRoutes } from './routes/agent.report.js';
@@ -21,7 +22,10 @@ import { registerAuthRoutes } from './routes/auth.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerHostRoutes } from './routes/hosts.js';
 import { registerPublicRoutes } from './routes/public.js';
+import { registerWsRoutes } from './routes/ws.js';
 import { buildErrorBody, normalizeError } from './utils/errors.js';
+import { createWsFanout } from './ws/fanout.js';
+import { createWsHub } from './ws/hub.js';
 
 export const SERVICE_NAME = 'vantage-core';
 export const SERVICE_VERSION = '0.8.0';
@@ -42,10 +46,10 @@ export const SERVICE_VERSION = '0.8.0';
  *  ✅ M2      GET /api/public/hosts/{slug}/now · /api/public/probes
  *             （公开单机展开与探活概览：⛔ 设备名泛化、目标脱敏，§3.2）
  *  ✅ M3      POST /api/v1/agents              （添加 Agent：签发凭证，明文仅一次，§4.4）
- *  ⏳ M2      GET /api/v1/hosts/{id}/metrics   （时序查询：档位/上限/响应格式待定稿，见方案 §10）
+ *  ✅ M2      GET /api/v1/hosts/{id}/metrics   （历史曲线：档位/两道闸门/桶对齐，§4.3）
+ *  ✅ M3      /ws/public · /ws/live            （WebSocket 快照+增量，§5）
  *  ⏳ M3      /api/v1/agents 的其余管理端点（列表/详情/PATCH/rotate/disable|enable/revoke，§4.4）
  *  ⏳ M3      /api/v1/alert-rules|alert-events|channels|silences|settings|users|audit-logs（§4.5–§4.10）
- *  ⏳ M3      /ws/public · /ws/live            （WebSocket 快照+增量，§5）
  *  ⛔ 永不存在 GET /api/v1/agent/config、/agent/tasks、/agent/command 等下发型端点（§2.3）
  */
 
@@ -97,7 +101,26 @@ export async function buildApp({ config, logger, db, redis, startupChecks = true
    */
   app.decorateRequest('session', null);
 
+  /**
+   * WebSocket 订阅中心（`src/ws/hub.js`）。
+   * ⚠️ 与 socket 实现无关：路由把连接登记进来、扇出把消息喂进来，它只回答"该发给谁"。
+   *    这样"频道白名单 / agent 过滤 / 死连接不拖垮广播"这些判断都能纯单测
+   *    （`app.inject()` 测不了 WebSocket，见 `routes/ws.js` 的文件头）。
+   */
+  const wsHub = createWsHub({ logger, maxClients: config.ws.maxClients });
+  app.decorate('wsHub', wsHub);
+
   // --- 插件 ------------------------------------------------------------------
+  // ⚠️ WebSocket 插件必须在**定义** `{ websocket: true }` 的路由之前注册：
+  //    晚于路由注册时，那些路由会静默退化成普通 HTTP 路由（握手直接 404/426），
+  //    而且不会报任何错 —— 是本项目最忌讳的那种静默失效。
+  await app.register(websocket, {
+    options: {
+      // 客户端→服务端只允许 `subscribe`（一条短 JSON）；64KB 已经宽松到离谱，防的是有人灌二进制
+      maxPayload: 64 * 1024,
+    },
+  });
+
   await app.register(cookie, {
     secret: undefined, // sid 是不透明随机值、服务端在 Redis 校验，⛔ 不做「签名 cookie」以避免双重语义
   });
@@ -177,6 +200,27 @@ export async function buildApp({ config, logger, db, redis, startupChecks = true
 
   // --- Agent 与凭证管理（✅ §4.4 的第一块：添加 Agent；⛔ 全站唯一返回明文凭证的响应）---
   await app.register(registerAgentAdminRoutes);
+
+  // --- WebSocket（✅ §5：快照 + 增量；⛔ 客户端→服务端只允许 `subscribe`）------
+  await app.register(registerWsRoutes);
+
+  /**
+   * Redis 扇出：订阅 `live:metrics`（生产者是 `ingest.service.js` 与 `cron.service.js`，
+   * 二者已在发，本层**原样转发、不翻译**）。
+   *
+   * ⚠️ 启动失败**不让整个中心起不来**：实时增量是锦上添花，REST 完全不受影响；
+   *    但必须**喊出来**（warn 日志），⛔ 不能静默降级成"面板永远不刷新"。
+   *    测试环境里的假 Redis 没有 `duplicate/subscribe`，走的就是这条路。
+   */
+  const wsFanout = createWsFanout({ redis, hub: wsHub, config, pool: db.app, logger });
+  app.decorate('wsFanout', wsFanout);
+  await wsFanout.start().catch((err) => logger?.warn?.({ err }, 'WS 扇出启动异常（实时增量不可用）'));
+
+  // 收尾顺序：先让扇出停止投递，再清掉连接记录（真实 socket 由 @fastify/websocket 关闭）
+  app.addHook('onClose', async () => {
+    await wsFanout.stop().catch((err) => logger?.warn?.({ err }, 'WS 扇出停止异常'));
+    wsHub.closeAll();
+  });
 
   return app;
 }

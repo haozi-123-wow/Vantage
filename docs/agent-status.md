@@ -28,10 +28,10 @@
 | 3 | ✅ **测试已全绿（2026-10-01）**：R-01 引号笔误修复后 prober 测试首次真正运行，暴露的 9 个失败用例已逐一定性处理（2 个代码缺陷修复、1 个测试向量纠正、2 个环境用例明确 skip） | `go vet ./...` / `go test ./... -count=1` exit 0；见 §5.1 与变更说明 §2 |
 | 4 | ✅ **文档口径已对齐（2026-10-01，`ab83d7f`）**：README 组件表/§3.2/§7 与 `docs/agent.md` §2 模块表（retry 内联、补 4 包）均已纠正；D-01/D-03 关闭 | 见 §6 与变更说明 §3 |
 | 5 | **M5 / M6 真未开工**：Docker 采集（配置层显式拒绝）、Windows/macOS（启动即拒绝） | 见 §4、§7 |
-| 6 | **M2 部署侧未开工**：仓库内没有任何 `.sh` / `.service` 文件 —— `vantage.sh`、systemd unit、`setcap` 运维文档全缺 | 见 §7 |
+| 6 | 🟡 **M2 部署侧已落地代码（2026-10-05），待真机验证**：`agent/deploy/` 现有 `vantage.sh`（POSIX sh）、`vantage-agent.service`、`config.minimal.yaml`、`build-release.sh`、`publish-release.sh`、`tests/{static-assert.sh,shell-lint.js}`、`README.md` —— 设计见 `docs/agent-install-script.md`；仍缺 `docs/agent-install-ops.md`（A-T13，`setcap`/出站白名单） | 见 §7；真机 11 条负例待 Owner 执行（设计 §12.2） |
 | 7 | ✅ **Agent 实现已提交（`8737820`，2026-09-30，98 文件 / +17858 行）**；其顺序偏差（红测试与草稿入库）已由 `1c6dd9a` 补救 | `git log`；§5.3 |
 
-**一句话（2026-10-01）**：**测试绿了、文档对齐了、代码进了历史；剩下的就是「补测试覆盖（A-T06/07/08）、真机 E2E 留痕（A-T09）、部署侧（A-T10～T13）」三件事。**
+**一句话（2026-10-05）**：**测试绿了、文档对齐了、部署侧脚本也写完了（🟡 待真机验证）；剩下的就是「补测试覆盖（A-T06/07/08）、部署侧真机验证与发布（A-T10～T13 的验收项）、步 0 的三源发布」。**
 
 ---
 
@@ -97,7 +97,7 @@
 | §8 校验规则 | https 强制、UUID、间隔下限、探活名唯一、未知键拒绝、错误指出完整键路径 | `config.go:460-680` | ✅ |
 | §10 资源预算 | `GOMEMLIMIT` 封顶、固定 goroutine、磁盘 ≈ 0 | `main.go:99` `debug.SetMemoryLimit`；`scheduler` 每采集器 1 条 + 上报 1 条；无磁盘写入 | ✅ |
 | §10 自监控三项 | `agent.mem_rss` / `agent.report_failures` / `agent.reload_ok` | `scheduler.go:456/462`、`model/report.go:180-185` | ✅ |
-| §12.1 `vantage.sh` | install / upgrade / uninstall(`--purge`) / start / stop / restart / status / reload | **仓库内无任何 `.sh` 文件** | ❌ |
+| §12.1 `vantage.sh` | install / upgrade / uninstall(`--purge`) / start / stop / restart / status / reload | `agent/deploy/vantage.sh`（POSIX sh，子命令齐；含源链回退、验签+sha256、凭证三形式） | 🟡 代码已落地，**真机验证待做** |
 | §12 systemd 加固 | `User=vantage`、`ProtectSystem=strict`、`ReloadSignal=SIGHUP` 等 | **仓库内无任何 `.service` 文件** | ❌ |
 | §13.3 平台路线 | M1–M5 只做 Linux；非 Linux 拒绝启动 | `collector/platform_other.go:23` `Supported=false`，`main.go:78-82` 拒绝启动并说明排期 | ✅ 设计如此 |
 | §14 M5 Docker 采集 | 预留转正 | `config.go:543` 开启 `collect.docker.enabled` 直接报错「排在 M5」 | ❌ 未开工 |
@@ -110,7 +110,7 @@
 | 阶段 | 文档要求的 Agent 产出 | 状态 | 说明 |
 |---|---|---|---|
 | **M1** | `cpu/mem/disk/net/gpu/process` 采集 + 组包上报 + 出站通路 | **✅ 代码完成** | 六类采集器齐备；`--once` 提供单次联调；构建通过 |
-| **M2** | key+HMAC、TLS、限流/幂等配合、单向性复核 + **安装脚本** | **🟡 代码齐 / 脚本缺** | 签名·TLS·mTLS·nonce/batch 语义齐；`vantage.sh`、systemd unit、`setcap` 文档全缺 |
+| **M2** | key+HMAC、TLS、限流/幂等配合、单向性复核 + **安装脚本** | **🟡 代码齐（含脚本）/ 待真机验证** | 签名·TLS·mTLS·nonce/batch 语义齐；`vantage.sh`、systemd unit、config 模板、打包与发布脚本已落地（`agent/deploy/`）；仍缺 `setcap` 运维文档（A-T13） |
 | **M3** | 探活三种完整 + 告警相关字段（漂移、离线心跳） | **🟡 代码齐 / 测试红** | ping/http/tcp 与心跳节流已实现；prober 测试因语法错误未运行，等于**未验证** |
 | **M4** | GPU/进程完善、非 root 打磨、SIGHUP 热重载、`setcap` 文档 | **🟡 部分** | 热重载 ✅、GPU 降级 ✅、Top-N ✅；`collect.process.watch` 不产出指标、非 root/systemd/`setcap` 未落地 |
 | **M5** | Docker 采集（预留转正）、systemd 加固打磨 | **❌ 未开工** | 配置层显式拒绝；无部署单元 |
@@ -235,8 +235,8 @@ npm test
 
 | 项 | 状态 | 位置 | 备注 |
 |---|---|---|---|
-| `vantage.sh` 安装/升级/卸载/控制脚本 | ❌ 未开工 | — | M2 交付物；含三种 key 传递形式 |
-| systemd unit + 非 root 加固 | ❌ 未开工 | — | M2/M5；`ReloadSignal=SIGHUP` 是热重载的运维入口 |
+| `vantage.sh` 安装/升级/卸载/控制脚本 | 🟡 代码已落地（2026-10-05） | `agent/deploy/vantage.sh` + 模板 + `tests/` | M2 交付物；含三种 key 传递形式；⛔ 真机负例（11 条）待 Owner 执行 |
+| systemd unit + 非 root 加固 | 🟡 模板已落地（2026-10-05） | `agent/deploy/vantage-agent.service`（脚本内嵌同文本） | M2/M5；`ReloadSignal=SIGHUP` 是热重载的运维入口；内存硬顶与日志去处属 A-T11 待定 |
 | `setcap cap_net_raw+ep` 运维文档 | ❌ 未写 | `docs/agent.md` §4/§9 已提，仓库无落地文档 | opt-in，非必需 |
 | 出站防火墙白名单示例 | ❌ 未写 | `docs/agent.md` §9「➕ 建议」 | 文档级 |
 | `collect.process.watch` 关键进程存活 | 🟡 配置可用、不产出指标 | `collector/process.go:99-105` | 需中心 schema 承载字段 |

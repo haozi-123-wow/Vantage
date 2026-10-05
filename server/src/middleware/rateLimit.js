@@ -222,3 +222,45 @@ export function createPublicRateLimiter({ redis, config, logger }) {
     }
   };
 }
+
+/**
+ * WebSocket **握手**限流（`/ws/public` 与 `/ws/live` 共用，桶 `ratelimit:ws:<ip>`）。
+ *
+ * 🔑 这里限的是"每分钟发起多少次**握手**"（= 升级请求），**不是**"同时保持几条连接"。
+ *    两者是两件事，必须分开（✅ docs/api.md §5.1）：
+ *      · **握手速率**（本函数）：防的是"反复连-断"刷服务端握手与鉴权开销；
+ *      · **并发连接数**（`config.rateLimit.wsConcurrentPerIp`，在 `routes/ws.js` 里按 IP 计）：
+ *        防的是"一个 IP 挂一堆连接把内存吃光"。
+ *    ⛔ 只做其中一个都会留下明显缺口：只限速率挡不住"慢慢连 1000 条"，只限并发挡不住连断风暴。
+ */
+export function createWsRateLimiter({ redis, config, logger }) {
+  const limit = config.rateLimit.wsHandshakePerMinute;
+  const windowS = 60;
+
+  return async function wsRateLimit(request, reply) {
+    const key = keys.rateLimitWs(request.ip);
+
+    let count;
+    let ttl;
+    try {
+      [count, ttl] = await redis.eval(FIXED_WINDOW_LUA, 1, key, windowS);
+    } catch (err) {
+      logger?.error({ err, ip: request.ip }, 'WS 握手限流检查失败（Redis 不可用）');
+      throw new AppError('upstream_unavailable', { cause: err, details: { dependency: 'redis' } });
+    }
+
+    const retryAfterS = Math.max(1, Number(ttl) || windowS);
+    reply?.header?.('X-RateLimit-Limit', String(limit));
+    reply?.header?.('X-RateLimit-Remaining', String(Math.max(0, limit - count)));
+    reply?.header?.('X-RateLimit-Reset', String(Math.floor(Date.now() / 1000) + retryAfterS));
+
+    if (count > limit) {
+      logger?.warn({ ip: request.ip, count, limit }, 'WS 握手被限流');
+      throw new AppError('rate_limited', {
+        message: `连接过于频繁，请稍后再试（上限 ${limit} 次 / ${windowS}s）`,
+        retryAfterS,
+        details: { limit, window_s: windowS, scope: 'ws_handshake' },
+      });
+    }
+  };
+}

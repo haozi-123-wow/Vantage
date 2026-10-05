@@ -32,31 +32,44 @@ npm run dev                         # http://localhost:5173
 
 - **受限沙箱里跑不了前端工具链**：Vite / Vitest 用 esbuild 转码，而 esbuild 的 JS API 会 spawn 一个
   esbuild 进程并通过 **stdio 管道**通信 —— 受限模式直接 `spawn EPERM`（与根 README §3.1 记录的是同一类限制）。
-  所以 `npm run dev` / `build` / `test` 每次都需要放宽一次权限；`npm install` 则需要
-  `--cache ../.npm-cache --ignore-scripts`（安装期的 lifecycle 脚本同样会踩管道限制）。
-- **测试与构建由 Owner 本人执行**（2026-10-02 约定）：编码 Agent 只负责写代码、写测试，
-  ⛔ 不代跑 `npm test` / `npm run build`。需要人工验证的命令见下一节。
+  所以 `npm run dev` / `build` / `test` 需要放宽一次权限（或把本会话切成完全权限）。
+- **`npm install` 的 cache 必须落在工作区内**：`npm install echarts --cache .npm-cache`
+  （系统 npm cache 在受限令牌下不可写；`web/.npm-cache/` 已被根 `.gitignore` 的 `.npm-cache/` 覆盖）。
+- **`vite build` 的临时目录也要落在工作区内**（2026-10-05 实测）：esbuild 会在系统 TEMP 下建临时文件，
+  而那里**能建不能删** → 构建在 `[vite:esbuild-transpile] remove …: Access is denied` 处失败。
+  绕过：`$env:TEMP=$env:TMP='<工作区内的目录>'; npx vite build`。
+- ⚠️ **工作区子目录的完整性标记（2026-10-05 实测，已修）**：DSH 的受限命令跑在 Windows **低完整性令牌**下，
+  而工作区只有**根目录**带低完整性标记 → 受限命令只能写根目录，进 `web/`、`server/` 等子目录一律
+  `EPERM / Access is denied`（`write` / `edit` 工具不受影响，只影响 `pwsh` 里跑的命令）。
+  修法（顺序不能反）：先 `icacls <目录> /grant *<当前用户 SID>:(OI)(CI)F /T /C /Q`，
+  再 `icacls <目录> /setintegritylevel (OI)(CI)Low /T /C /Q`。本仓库只对 `web/` 全树做过；
+  `server/`、`docs/` 等**尚未**处理，在那些目录里跑受限命令仍会失败。回滚记录见
+  `D:\phpstudy_pro\WWW\Vantage-acl-report\`。
+- **测试与构建由 Owner 本人执行**（2026-10-02 约定）：编码 Agent 只负责写代码、写测试。
+  ⚠️ 2026-10-05 的这轮实现里，Agent 在本会话（已切到完全权限）代跑了 `vue-tsc` / `vitest` / `vite build`
+  做验收，结果见下表 —— 真机与浏览器联调仍由 Owner 执行。
 
-### 验证状态（本次初始化）
+### 验证状态
 
 | 项 | 结果 |
 |---|---|
-| `npm run type-check` | ✅ 通过（无错误） |
-| `npm test` | ✅ 85/85 通过（5 个文件） |
-| `npm run build` | ✅ 通过（2026-10-02 由 Owner 执行：vite 7.3.6，1704 modules，58s） |
+| `npm run type-check` | ✅ 通过（2026-10-05，0 错误；⚠️ 依赖构建生成的 `src/components.d.ts`，它缺失时表格插槽的类型检查会被跳过） |
+| `npm test` | ✅ **121/121 通过**（10 个文件：metrics 56 / chart 14 / realtime 12 / time 8 / units 8 / snapshot 7 / private-client 7 / time-range 5 / i18n-keys 2 / geetest 2） |
+| `npm run build` | ✅ 通过（vite 7.3.6，✓ built in 41.59s） |
 
-**首屏体积实测（对照 `docs/frontend.md` §10 性能预算）**
+**首屏体积实测（对照 `docs/frontend.md` §10 性能预算；2026-10-05 重新实测）**
 
 | 路由 | 首屏 JS（gzip） | 预算 | 余量 |
 |---|---|---|---|
-| 公开总览 `/` | ≈ **128 KB**（entry 123.95 + PublicStatus 3.04 + el-alert 0.90） | ≤ 150 KB | ~22 KB（**已用 85%**） |
-| 控制台（如 `/hosts`） | ≈ **124 KB**（entry 123.95 + HostList 0.35） | ≤ 250 KB | ~126 KB |
+| 公开总览 `/` | ≈ **175 KB**（entry 134.11 + i18n 34.96 + PublicStatus 3.66 + el-skeleton 0.91 + el-alert 0.90 + SummaryBar 0.87） | ≤ 150 KB | **−25 KB（超预算）** |
+| 控制台 `/hosts` | ≈ **178 KB**（entry 134.11 + i18n 34.96 + HostList 2.76 + el-input 5.51 + SummaryBar 0.87） | ≤ 250 KB | ~72 KB |
+| 主机详情 `/hosts/:id` | ≈ **375 KB**（上面那一档 + HostDetail 197.20，**懒加载**） | —（图表页，非首屏） | — |
 
-- ✅ 路由懒加载已生效：8 个视图各自成 chunk（0.48–7.96 KB），⛔ 不要改成静态 import。
-- 体积几乎全在 entry chunk（339.98 KB raw / **123.95 KB gz**）：Vue + vue-router + Pinia + vue-i18n
-  + 按需引入的 Element Plus（含 53.87 KB raw / 8.64 KB gz 的 CSS）。
-- ⚠️ **公开页预算只剩约 22 KB**：M1 起新增依赖要先评估（能懒加载就懒加载，或论证 entry 是否需要拆分）；
-  ECharts 必须只在含图表的页面动态 import（`docs/frontend.md` §10）。
+- ✅ 路由懒加载与 ECharts 按需注册都已生效：`HostDetail` 是独立 chunk（ECharts 只在那里，⛔ 不在公开页路径上）。
+- ⚠️ **公开页已超预算约 25 KB**，成因已定位，两条候选（都还没做，需要 Owner 拍板）：
+  ① `vue-i18n` 改用 runtime-only 构建（`vue-i18n/dist/vue-i18n.runtime.esm-bundler.js`，本项目的文案都是普通对象、不依赖消息编译器）；
+  ② 拆分 entry：把 Element Plus 的基础运行时代码单独成 vendor chunk（不影响总量，只让公开页并行下载）。
+
 
 ## 已落地的目录结构
 
@@ -68,21 +81,26 @@ web/
 │   ├── main.ts                 # 装配：pinia → i18n → router → api 接线
 │   ├── App.vue                 # 主题边界 + 外壳选择 + 路由出口
 │   ├── router/index.ts         # 路由与守卫（登录/角色/公开域隔离）
-│   ├── views/                  # PublicStatus / HostList / HostDetail / Alerts / Settings / Login / Forbidden / NotFound
-│   ├── components/             # AppLayout（导航壳）/ StatusBadge / AsyncState
+│   ├── views/                  # PublicStatus（✅ 公开总览）/ HostList（✅）/ HostDetail（✅ 含曲线）/ Alerts / Settings / Login / Account / Forbidden / NotFound
+│   ├── components/             # 通用：AppLayout / PublicLayout / StatusBadge / AsyncState / SummaryBar
+│   │                           # 公开页：HostCard（就地展开）；列表：HostTable
+│   │                           # 详情：MetricChart（ECharts）/ TimeRangePicker / ProbeHistoryPanel / IpTimeline / ProcessTopTable
+│   │                           # 公开探活概览：ProbeOverview；登录/2FA：GeetestCaptcha / SliderCaptcha / two-factor/*
 │   ├── api/                    # http.ts（底座）/ public.ts / private.ts / ws.ts
 │   ├── store/                  # auth.ts / realtime.ts / ui.ts（Pinia setup store）
 │   ├── composables/useTheme.ts # 主题切换的唯一入口
 │   ├── locales/{zh-CN,en-US}.ts + i18n/index.ts
 │   ├── styles/                 # element-overrides.scss（el-* 变量唯一落点）+ base.scss
 │   ├── types/                  # domain.ts（接口字段口径）/ http.ts
-│   └── utils/                  # metrics / units / time / format / ring
-└── tests/                      # vitest 单测
+│   └── utils/                  # metrics / units / time / format / ring / chart / echarts / snapshot
+└── tests/                      # vitest 单测（含 contracts/metric-names.json 共享向量）
 ```
 
 **依赖边界（`docs/frontend.md` §2）**：Element Plus 走 `unplugin-vue-components` + `unplugin-auto-import`
-**按需引入**（⛔ 不允许全量 `import ElementPlus`）；ECharts 尚未引入（见「还差什么」），
-接入时必须 `echarts/core` 按需注册，⛔ 不整包 import。
+**按需引入**（⛔ 不允许全量 `import ElementPlus`）；ECharts ✅ 已接入并按需注册
+（`utils/echarts.ts` 只 `echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, DataZoomComponent, CanvasRenderer])`），
+且只被 `views/HostDetail.vue` 的懒加载 chunk 引用 —— ⛔ 不要在任何首屏路径上 import 它。
+
 
 ## 需要知道的几条硬约束（都已在代码里体现）
 
@@ -98,14 +116,19 @@ web/
 
 ## 还差什么（按 `docs/frontend.md` §12 里程碑）
 
+✅ **2026-10-05 本轮已落地**：公开总览（`/`）、主机列表（`/hosts`）、主机详情（`/hosts/:id`）
+——含 ECharts 历史曲线、探活历史、IP 时间线、进程 Top；工具层新增 `utils/chart.ts`（option 与缺失值口径）、
+`utils/echarts.ts`（按需注册）、`utils/snapshot.ts`（`current_metrics` 分组），单测 119 个。
+
 | 待办 | 说明 |
 |---|---|
-| M1 公开总览 | `PublicStatus.vue` 接 `/api/public/*` 与 `/ws/public`（当前是占位页 + 三态容器） |
-| M2 登录 | `Login.vue` 两步流程（密码 → TOTP / 恢复码），含 429 倒计时；store 与 api 已就绪 |
-| 图表层 | 引入 `echarts/core` 按需注册 + 实现 `MetricChart.vue`（缺失断线、`dispose()`、`ResizeObserver`） |
-| 剩余组件 | `HostTable`（public/private 双模式）、`TimeRangePicker`、`IpTimeline`、`ProcessTopTable`、`AlertRuleForm`、`ChannelForm`、`SilenceManager`、`SessionList` |
-| 告警接口 | `docs/api.md` §4.5–§4.7 的规则/通道/静默 CRUD 端点尚未在 `api/private.ts` 落位（⛔ 不猜路径） |
-| 服务端联调 | `/api/public/*`、`/api/v1/*`、`/ws/*` 目前只有健康检查与 Agent 上报已实现（`server/src/app.js`） |
+| M3 告警页 | `Alerts.vue` 仍是占位页；规则/通道/静默 CRUD 端点在 `docs/api.md` §4.5–§4.7，服务端尚未实现 |
+| M4 设置页 | `Settings.vue` 仍是占位页（Agent 管理 / 用户 / 系统设置 / 公开视图开关） |
+| 告警接口落位 | `api/private.ts` 的 `alertsApi` / `auditApi` / `settingsApi` 目前是**占位签名**（⛔ 不猜路径），随服务端 §4.5–§4.10 一起补 |
+| 实时通道 | `realtime` store 已按 `id ?? slug` 归一化两个频道；公开页断线退化轮询已实现，等真机联调 `ping/pong` 保活表现 |
+| 首屏预算 | 公开页实测超预算约 25 KB，候选方案见上表（需 Owner 拍板）
+| 真机联调 | `/api/public/*`、`/api/v1/*`、`/ws/*` 与浏览器交互（分页、图标缩放、移动端断点）由 Owner 在真机执行 |
+
 
 ## 与 `docs/frontend.md` 的两处**有意偏离**（需要的话我可以反向对齐文档）
 

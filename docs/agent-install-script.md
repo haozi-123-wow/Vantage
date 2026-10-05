@@ -1,6 +1,6 @@
 # Vantage Agent 安装脚本（`vantage.sh`）设计文档
 
-> 状态：**设计定稿，未写实现代码**（2026-10-05）。落地对应待办 `docs/agent-todo.md` **A-T10 / A-T11 / A-T12 / A-T13**。
+> 状态：**已实现（2026-10-05），未做真机验证**。落地对应待办 `docs/agent-todo.md` **A-T10 / A-T11 / A-T12 / A-T13**：`agent/deploy/` 下已交付脚本本体、unit/config 模板、静态断言与打包发布脚本；真机/容器验证按 §12.2 由 Owner 执行。
 > 上位文档：`Vantage-DESIGN-v0.7.md`（内容 = v0.8）§12.2 / §12.4、`docs/agent.md` §6.1 / §9 / §12、`docs/api.md` §4.4（`install_hint` **已实现**，参数名已冻结）。
 > 范围：只定义**部署侧（分发 + 安装 + 运维）契约**。⛔ 不动上报协议、⛔ 不动中心接口、⛔ 不引入任何「中心下发」路径。
 > 标记：✅ **已定**（Owner 拍板或有上位依据） ｜ ➕ **默认**（本稿取值，Owner 一句话即可推翻） ｜ ⏭ **移交**（属别的待办，不阻塞本脚本） ｜ ➖ **撤销**（曾列入，已界定为范围外）
@@ -73,14 +73,16 @@
 
 | 文件 | 内容 | 待办 |
 |---|---|---|
-| `agent/deploy/vantage.sh` | 唯一入口，POSIX `sh`，子命令 `install/upgrade/uninstall/start/stop/restart/reload/status/version/help` | A-T10 |
-| `agent/deploy/vantage-agent.service` | systemd unit（脚本内嵌同一份文本，文件用于审计/对照） | A-T11 |
-| `agent/deploy/config.minimal.yaml` | 安装时生成的 `config.yaml` 模板（最小必填 + 注释示例） | A-T10 |
-| `agent/deploy/build-release.sh` | 开发者工具：交叉编译 + 打包 + `SHA256SUMS` | 分发前提 |
-| `agent/deploy/publish-release.sh` | 维护者工具：签名 + 推三源 + 写 `latest.txt` + 回读自检（§4.5） | ✅ Q1/Q2 |
-| `agent/deploy/tests/static-assert.sh` | 静态断言（红线检查，§12.1） | A-T12 |
-| `docs/agent-install-ops.md` | `setcap` opt-in、出站白名单、凭证替换、排障 | A-T13 |
-| `docs/agent-install-script.md` | 本文 | — |
+| `agent/deploy/vantage.sh` | 唯一入口，POSIX `sh`，子命令 `install/upgrade/uninstall/start/stop/restart/reload/status/version/help` | A-T10 ✅ |
+| `agent/deploy/vantage-agent.service` | systemd unit 模板（与脚本内嵌 `UNIT_TEMPLATE` 逐字一致） | A-T11 ✅ |
+| `agent/deploy/config.minimal.yaml` | `config.yaml` 模板（与脚本内嵌 `CONFIG_TEMPLATE` 逐字一致） | A-T10 ✅ |
+| `agent/deploy/build-release.sh` | 开发者工具：`--keygen` 生成发布密钥对；打包 + `SHA256SUMS` | 分发前提 ✅ |
+| `agent/deploy/publish-release.sh` | 维护者工具：签名 + 推三源 + 写 `latest.txt` + 回读自检 | ✅ Q1/Q2 |
+| `agent/deploy/tests/static-assert.sh` | 红线静态断言（需 POSIX `sh`；在真机/Linux 上跑） | A-T12 ✅ |
+| `agent/deploy/tests/shell-lint.js` | 本机（Windows/Node）等价检查：块配平 + 红线 + 模板一致性，**自带自测** | 本机验证 ✅ |
+| `agent/deploy/README.md` | 部署侧交付物说明 + 步 0 操作清单 | ✅ |
+| `docs/agent-install-ops.md` | `setcap` opt-in、出站白名单、凭证替换、排障 | A-T13 ⬜ 未开始 |
+| `docs/agent-install-script.md` | 本文（设计 + 决策台账） | — |
 
 ✅ **Q7**：交付物统一放 `agent/deploy/`（agent 的东西归 agent）；`AGENT_INSTALL_SCRIPT_URL` 指向**自建站最新地址**，换脚本只重传一份，⛔ 不用改中心 `.env`。
 
@@ -318,7 +320,8 @@ vantage.sh          ← 脚本自身的同版本拷贝
 2. `systemctl is-active vantage-agent` == `active`（等最多 10s）；失败 → §6.9（移除本次新建的 unit 与二进制；⛔ 保留 `/etc/vantage`），退出码 8。
 3. 从 journald 抓最近 20 行，确认出现 `vantage-agent 启动`，且不含 `failed`/`panic`。
 4. 写 `install-state`。
-5. 打印收尾：面板预期（已冒烟上报一次，应立刻/在一个周期内出现）、`verified` 与公钥指纹、下一步（编辑 `config.yaml` 加探活 → `vantage.sh reload`）、`vantage.sh status` 提示。
+5. **脚本自安装**：若本次是从文件执行的（`$0` 是真实脚本路径）→ 复制到 `/usr/local/bin/vantage.sh`（0755 root:root），这样日常 `sudo vantage.sh status|reload|upgrade` 才可用；⚠️ 若本次是**管道执行**（`$0` 是 `sh`，即面板一键命令的形态）→ ⛔ 无法自安装，改为打印一条可直接复制的另存命令（从**本次实际使用的源**取 `vantage.sh`）。
+6. 打印收尾：面板预期（已冒烟上报一次，应立刻/在一个周期内出现）、`verified` 与公钥指纹、下一步（编辑 `config.yaml` 加探活 → `vantage.sh reload`）、`vantage.sh status` 提示。
 
 ### 6.8 幂等与接管
 
@@ -356,7 +359,7 @@ vantage.sh          ← 脚本自身的同版本拷贝
 ### 7.2 `uninstall`
 
 - 默认：`stop` → `disable` → 删 unit + `daemon-reload` → 删二进制；**保留** `/etc/vantage/`（配置 + 凭证）、`install-state`、日志；打印保留路径与「彻底清理」命令（✅ G9）。
-- `--purge`：先打印**将被删除的清单**，需交互输入 `yes`（⛔ `-y` 不可跳过，⛔ 无 TTY 直接拒绝）；删除配置目录、状态文件、运行用户（仅在「无该用户的其他文件属主」或明确 `--remove-user` 时）。
+- `--purge`：先打印**将被删除的清单**，需交互输入 `yes`（⛔ `-y` 不可跳过，⛔ 无 TTY 直接拒绝）；删除配置目录、状态文件、`/usr/local/bin/vantage.sh`（脚本自身）、运行用户（仅在「无该用户的其他文件属主」或明确 `--remove-user` 时）。
 - ⛔ 任何情况下都不动中心侧数据、不删数据库。
 
 ### 7.3 `start` / `stop` / `restart` / `reload`
@@ -520,9 +523,14 @@ host:
 
 ### 12.1 本机可做（Windows 开发机）
 
-1. `sh -n agent/deploy/vantage.sh` 语法检查（Git for Windows 自带 `usr/bin/sh.exe`；不可用则在 Linux 容器内做）。
-2. **静态断言**（`agent/deploy/tests/static-assert.sh`）：⛔ 无 `--key`/`--secret` 参数、⛔ 无 `eval`、必须出现 `unset VANTAGE_KEY`、`--purge` 必含确认、`--help` 不含 `vk_`/`vs_` 样例。
-3. `build-release.sh` 只验**交叉编译产物**（`CGO_ENABLED=0 GOOS=linux`，与 `docs/agent-testing.md` §6 同口径）。
+1. **结构化校验（本机即可跑，已落地）**：
+   ```sh
+   node agent/deploy/tests/shell-lint.js --selftest     # 先证明检查器本身能抓错
+   node agent/deploy/tests/shell-lint.js                # 块配平 + 红线 + 模板一致性
+   ```
+   ⚠️ 本机 MSYS 的 `sh.exe` 在 DSH 沙箱下会报 `couldn't create signal pipe, Win32 error 5`（命名管道限制），因此 `sh -n` 与下面的静态断言**要在 Linux/真机上跑**；`shell-lint.js` 是它的本机等价物，但⛔ 不能替代真机验证。
+2. **静态断言（需 POSIX `sh`）**：`sh agent/deploy/tests/static-assert.sh` —— ⛔ 无 `--key`/`--secret` 明文参数、⛔ 无 `eval`、`unset VANTAGE_KEY` 晚于写盘、`--purge` 必须输入 `yes`（且 `-y` 无法跳过）、`--help` 无凭证样例、内嵌模板与独立文件逐字一致、无 bashism。
+3. `build-release.sh` 交叉编译验证（`CGO_ENABLED=0 GOOS=linux`，与 `docs/agent-testing.md` §6 同口径；需要 Go 工具链）。
 
 ### 12.2 需真机/容器（**按协作约定由 Owner 执行**，命令可直接复制）
 
@@ -612,3 +620,4 @@ sudo vantage.sh status
 | 安装与升级流程（Q4/Q9） | Q4 定「装完必须真发一次上报」并前移到**装 unit 之前**（§6.6）；Q9 定「升级也做真实上报」并实现为**替换前预演**（§7.1） |
 | 范围界定（Q7/Q8） | Q7 定落点 `agent/deploy/` + 自建站 URL；Q8（ICMP 权限）Owner 界定为 Agent 运行侧事务 → **撤销**，不在脚本内提供开关 |
 | 收口与整理（Q6/Q10/Q11/Q12） | Q6/Q10/Q11/Q12 按默认取值（台账 ➕）；本文重排为「台账在前 + 单一出处 + 统一标记」，修正原 §6.5 自相矛盾（"只补缺失字段"在纯 sh 下不可实现） |
+| **实现落地** | `agent/deploy/` 交付 `vantage.sh`（约 1200 行，POSIX sh：install/upgrade/uninstall/启停/reload/status + 源链回退 + 验签与 sha256 + 凭证三形式 + 冒烟上报前移 + 首次安装回滚 + 接管旧机）、`vantage-agent.service`、`config.minimal.yaml`、`tests/static-assert.sh`、`tests/shell-lint.js`（本机等价校验，带自测）、`build-release.sh`（含 `--keygen`）、`publish-release.sh`（签名 + 三源 + 回读自检）、`README.md`。实现期修正两处自查缺陷：① `-y` 曾可绕过 `--purge` 确认；② 冒烟失败时未清理二进制且 `runuser`/`su` 会重复发送。另外补了一处**设计缺口**：设计里的日常命令是 `sudo vantage.sh status`，但管道安装时脚本本身不会留在机器上 → 新增 §6.7 第 5 步「脚本自安装」（从文件执行则复制到 `/usr/local/bin/vantage.sh`；管道执行则打印另存命令）。本机验证：`shell-lint --selftest` + 四个脚本全绿。**真机/容器验证未做**（§12.2，由 Owner 执行）；`.gitignore` 增加私钥兜底忽略 |

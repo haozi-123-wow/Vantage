@@ -272,6 +272,8 @@ node scripts/partitions.js --drop-expired 15 --dry-run # 只看会删哪些
 | `src/routes/agent.report.js` | docs/api.md §2.1/§2.2/§2.3/§5.3/§6.1 |
 | `src/services/status.service.js` + `src/routes/{public,hosts}.js` + `src/middleware/publicView.js` | docs/api.md §3.1/§3.2/§4.2、§1.2 ③；`docs/server-status-api.md`（全部决策与取数策略）；落地记录 `docs/api-status.md` §4.6 |
 | `src/utils/time.js` | docs/api.md §1.2 ③（`from`/`to` 的时间格式与范围约束）、§4.3 |
+| `src/ws/hub.js` + `src/ws/fanout.js` + `src/routes/ws.js` | docs/api.md §5（频道集合/消息格式/语义约束的**定稿**）、§5.1（限流与 Origin）、落地记录 `docs/api-status.md` §4.9（H1–H9） |
+| `src/services/metricQuery.service.js` + `src/repositories/metric.repo.js`（`METRIC_STEPS` + 两个时序查询） | docs/api.md §4.3（档位/`agg`/两道闸门/响应格式的**定稿**）、docs/database.md §5.7/§5.8（`metrics_raw` 与降采样层的列）、落地记录 `docs/api-status.md` §4.8（G1–G10） |
 | `src/routes/agents.js` + `src/services/agentAdmin.service.js` | docs/api.md §4.4（含决策 #37 修订的三条硬约束）、docs/agent.md §6.1/§12.1、docs/database.md §5.1/§5.2（✅ R1） |
 | `src/services/offline.service.js` | 设计 §5.3、`docs/database.md` §8.2（离线判定 + 防抖）、`docs/api-status.md` §4.4 |
 | `migrations/*` | docs/database.md §5 全表 + §8 保留期（✅ R1–R19） |

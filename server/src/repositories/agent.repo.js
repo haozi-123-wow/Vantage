@@ -331,6 +331,28 @@ ${STATUS_ROW_SOURCE}
 }
 
 /**
+ * 取一台主机的**公开引用**（id → `public_slug`），供公开侧 WS 增量使用。
+ *
+ * 🔑 为什么不复用 `findAgentStatusById` 再挑字段：公开路径**只允许**拿到 slug，
+ *    ⛔ 不该把内部行对象（含 `last_ip` / `reported_ip` / `host_info`）带进公开代码路径。
+ *    这里顺带把"是否对外可见"（`disabled`）关在 SQL 里 —— 忘了判一次的后果是
+ *    "刚禁用的机器继续在公开页上刷新"，而且不会报错。
+ *
+ * @returns {Promise<{ id: string, public_slug: string }|null>} 不存在**或已禁用** → `null`
+ */
+export async function findAgentPublicRef(pool, agentId) {
+  const { rows } = await pool.query(
+    `SELECT id, public_slug
+       FROM agents
+      WHERE id = $1::uuid
+        AND status <> 'disabled'
+        AND disabled_at IS NULL`,
+    [agentId],
+  );
+  return rows[0] ?? null;
+}
+
+/**
  * 按**公开标识**取单台主机（`GET /api/public/hosts/{slug}/now` 用）。
  *
  * ⚠️ `effective_status <> 'disabled'` 是**必需**的过滤，不是顺手写的：

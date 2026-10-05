@@ -443,6 +443,12 @@ export function loadConfig(env = process.env, options = {}) {
     /** 滑块取题/验题按 IP（✅ docs/api.md §1.4：独立桶，比登录桶宽松——"换一张图"是正常操作） */
     captchaPerMinute: int('RATELIMIT_CAPTCHA_PER_MINUTE', { def: 30, min: 1 }),
     wsConcurrentPerIp: int('RATELIMIT_WS_CONCURRENT_PER_IP', { def: 3, min: 1 }),
+    /**
+     * WS **握手**速率（每分钟 / 每 IP，桶 `ratelimit:ws:<ip>`）。
+     * ⚠️ 与上面的"每 IP 并发连接数"是**两件事**，缺一不可（✅ docs/api.md §5.1）：
+     *    只限速率挡不住"慢慢连 1000 条"，只限并发挡不住"连-断风暴"。
+     */
+    wsHandshakePerMinute: int('RATELIMIT_WS_HANDSHAKE_PER_MINUTE', { def: 30, min: 1 }),
   };
 
   // --- 数据保留与分区（✅ 决策 #11/#38、docs/database.md §8.1）--------------
@@ -525,6 +531,25 @@ export function loadConfig(env = process.env, options = {}) {
     throw err;
   }
 
+  // --- WebSocket（✅ 2026-10-05 定稿；语义与消息编码见 docs/api.md §5）----------
+  const ws = {
+    /**
+     * 服务端发**协议层 ping 帧**的间隔（秒）。
+     * ⚠️ 这是"保活"不是"应用层心跳"：浏览器收到 ping 帧会**自动**回 pong 帧（JS 不参与），
+     *    所以客户端→服务端的应用层消息面才能收敛成唯一的一条 `subscribe`。
+     * 选 30s 的理由：与 Agent 上报周期同量级，且远小于常见反代的 60s 读超时
+     * （反代读超时**必须** > 本值，见 docs/api.md §5.1）。
+     */
+    keepaliveIntervalS: int('WS_KEEPALIVE_INTERVAL_S', { def: 30, min: 5 }),
+    /**
+     * 单进程最多同时保持多少条连接 —— 兜底保护中心自己（防总连接数把内存吃光）。
+     * ⚠️ 与 `rateLimit.wsConcurrentPerIp`（**每 IP** 上限，默认 3）是两回事：
+     *    那条防单个 IP 刷连接（读法见 docs/api.md §5.1 的 `ratelimit:ws:<ip>`），
+     *    这条防"所有 IP 加起来"把进程撑爆。
+     */
+    maxClients: int('WS_MAX_CLIENTS', { def: 500, min: 1 }),
+  };
+
   return Object.freeze({
     nodeEnv,
     isProd,
@@ -544,6 +569,7 @@ export function loadConfig(env = process.env, options = {}) {
     heartbeat: Object.freeze(heartbeat),
     flapping: Object.freeze(flapping),
     cron: Object.freeze(cron),
+    ws: Object.freeze(ws),
   });
 }
 

@@ -54,6 +54,55 @@ export function formatLocalWithOffset(input: TimeInput, options: FormatOptions =
   return `${formatLocalDateTime(date, options)} (${formatUtcOffset(date)})`
 }
 
+/**
+ * 时间范围预设（docs/frontend.md §6.2 / F9）。
+ *
+ * ⛔ 前端**不维护**「哪个预设对应哪个档位」的映射表：`TimeRangePicker` 只传 `from`/`to`，
+ *    服务端按 `step=auto` 选档（"选最细的一档使点数 ≤ 2000"）并在响应里回传**实际** step。
+ *    ⚠️ 最长 30 天是服务端的硬上限（超出 400 `range_too_large`，docs/api.md §4.3）。
+ */
+export type TimeRangeKey = '1h' | '6h' | '24h' | '7d' | '30d'
+
+export interface TimeRangePreset {
+  key: TimeRangeKey
+  spanSeconds: number
+}
+
+export const TIME_RANGE_PRESETS: readonly TimeRangePreset[] = [
+  { key: '1h', spanSeconds: 3_600 },
+  { key: '6h', spanSeconds: 21_600 },
+  { key: '24h', spanSeconds: 86_400 },
+  { key: '7d', spanSeconds: 604_800 },
+  { key: '30d', spanSeconds: 2_592_000 },
+]
+
+/** ✅ F9：默认 6h */
+export const DEFAULT_TIME_RANGE: TimeRangeKey = '6h'
+
+export function isTimeRangeKey(value: unknown): value is TimeRangeKey {
+  return TIME_RANGE_PRESETS.some((preset) => preset.key === value)
+}
+
+export interface ResolvedTimeRange {
+  key: TimeRangeKey
+  /** RFC3339（带时区）——⛔ 服务端不接受不带时区的裸时间串（会 400） */
+  from: string
+  to: string
+  spanSeconds: number
+}
+
+/** 预设 → 具体区间；`now` 可注入，便于单测 */
+export function resolveTimeRange(key: TimeRangeKey, now: number = Date.now()): ResolvedTimeRange {
+  const preset = TIME_RANGE_PRESETS.find((item) => item.key === key) ?? TIME_RANGE_PRESETS[1]
+  const spanMs = preset.spanSeconds * 1000
+  return {
+    key: preset.key,
+    from: new Date(now - spanMs).toISOString(),
+    to: new Date(now).toISOString(),
+    spanSeconds: preset.spanSeconds,
+  }
+}
+
 /** 相对时间（列表页用；绝对时间走 `title` 提示，docs/frontend.md §4.3） */
 export function formatRelative(input: TimeInput, now: number = Date.now()): string {
   const date = toDate(input)
