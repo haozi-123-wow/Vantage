@@ -280,6 +280,22 @@ source_chain() {
   done
 }
 
+chain_string() { # 与 source_chain 同序，但静默（status 用）
+  if [ -n "$SOURCE" ]; then
+    printf '%s' "${SOURCE%/}"
+    return 0
+  fi
+  out=''
+  for s in "$SELF_HOSTED_SOURCE" "$MIRROR_SOURCE" "$GITHUB_SOURCE"; do
+    [ -n "$s" ] || continue
+    case "$s" in
+      *'<'*|*'>'*) continue ;;
+    esac
+    if [ -z "$out" ]; then out="${s%/}"; else out="$out → ${s%/}"; fi
+  done
+  printf '%s' "$out"
+}
+
 asset_url() { # SRC TAG NAME
   case "$1" in
     *github.com*) printf '%s/releases/download/%s/%s' "$1" "$2" "$3" ;;
@@ -1212,6 +1228,7 @@ cmd_status() {
   printf '服务状态      : %s%s\n' "$active" "$([ -n "$since" ] && printf '（启动于 %s）' "$since")"
   printf '版本          : %s（脚本 %s）\n' "$ver" "$SCRIPT_VERSION"
   printf '来源/校验     : %s / verified=%s（公钥指纹 %s）\n' "$src" "$verified" "$fp"
+  printf '下载源链      : %s\n' "$(chain_string)"
   printf '最后上报      : %s\n' "${last_ok:-（journald 里没找到“上报成功”记录）}"
   printf '最近失败      : %s\n' "${last_err:-（无）}"
   printf '生效配置摘要  : %s\n' "${summary:-（无法获取，检查 config.yaml 与凭证权限）}"
