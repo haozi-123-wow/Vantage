@@ -12,6 +12,8 @@
  * ⛔ `ts` 一律等于 `server_ts`（决策 #16）：Agent 侧时间只进 `agents.last_agent_ts`。
  */
 
+import { AppError } from '../utils/errors.js';
+
 /**
  * 批量写入原始指标。
  *
@@ -205,4 +207,170 @@ export async function selectLatestProcessSnapshot(pool, { agentId, at = null }) 
     [agentId, at],
   );
   return rows[0] ?? null;
+}
+
+// -----------------------------------------------------------------------------
+// 时序查询（`GET /api/v1/hosts/{id}/metrics`，docs/api.md §4.3）
+// -----------------------------------------------------------------------------
+
+/**
+ * 时序档位白名单。
+ *
+ * 🔑 一个档位 = 「曲线上点多长时间一格」＋「读哪张表」。本实现里二者**一一对应**，
+ *    且**不做"在降采样表上再聚合"**（✅ 2026-10-05 定：最长只看 30 天）：
+ *      · `30s` → `metrics_raw`，网格 = 上报周期（`AGENT_REPORT_PERIOD_S`，见 offline.service.js）
+ *      · `1m` / `5m` → 降采样层，网格 = 表里现成的 `bucket`
+ *
+ * ⛔ **不再有 `15s` 档**：Agent 默认上报周期在修订 G3 已由 15s 改为 **30s**
+ *    （`agent/internal/config/config.go`）。15s 的网格会让每两个桶空一个 ——
+ *    前端看到的是"这台机一直在丢采集"，而真实原因是档位比上报周期还细。
+ *    档位宁可偏粗：30s 网格查 15s 上报的机器只是每桶 2 个样本（agg 会处理掉），不会出现空桶。
+ *
+ * ⛔ 表名无法参数化（要拼进 SQL），故只允许取自此处的固定值。
+ */
+export const METRIC_STEPS = Object.freeze({
+  '30s': { table: 'metrics_raw', sizeS: 30, timeColumn: 'ts', alignedColumn: null },
+  '1m': { table: 'metrics_1m', sizeS: 60, timeColumn: 'bucket', alignedColumn: 'bucket' },
+  '5m': { table: 'metrics_5m', sizeS: 300, timeColumn: 'bucket', alignedColumn: 'bucket' },
+});
+
+/**
+ * `agg` → 聚合表达式。两个来源层的列名不同：raw 是单值列 `value`，
+ * 降采样层是降采样时就**预先算好**的四列（`v_avg` / `v_min` / `v_max` / `v_last`）。
+ *
+ * ⚠️ 降采样层每个 `(agent_id, metric, bucket)` 只有一行，聚合函数实际上是恒等的；
+ *    保留聚合形式只是为了与 raw 共用同一段 SQL。
+ *    ⛔ 因此**不要**在这里做跨桶再聚合 —— 那个决定（不做）见上一条；
+ *    真要跨桶加权平均，`n` 已经在表里，届时应写成 `sum(v_avg * n) / sum(n)`。
+ */
+const AGG_EXPRESSION = Object.freeze({
+  avg: { raw: 'avg(value)', downsampled: 'avg(v_avg)' },
+  max: { raw: 'max(value)', downsampled: 'max(v_max)' },
+  min: { raw: 'min(value)', downsampled: 'min(v_min)' },
+  // 「桶内最后一条」：同组内 ts 唯一（主键是 (agent_id, metric, ts)），故 DESC 取首个即最后一条
+  last: { raw: '(array_agg(value ORDER BY ts DESC))[1]', downsampled: 'max(v_last)' },
+});
+
+/**
+ * 组装 `metrics` 参数的 WHERE 片段（基名展开 + 全名精确匹配）。
+ *
+ * 🔑 基名用**区间比较**而不是 `LIKE 'base{%'`：`_` 在 LIKE 里是单字符通配符，
+ *    而本项目的基名大量使用下划线（`used_pct` / `rx_bps` / `ctx_switch`）——
+ *    `LIKE 'disk.used_pct{%'` 会把 `diskXused_pct{...}` 也匹配进来。
+ *    区间 `[base || '{', base || '}')` 零成本且从根上避免
+ *    （与 `selectLatestSeriesForAgents` 同一口径，docs/api.md §4.3）。
+ *
+ * ⚠️ 它是**行级谓词**（不是 JOIN），所以"请求里同时写了基名和它下面的某个全名"
+ *    天然不会让同一条序列出现两次 —— 不需要额外去重。
+ *
+ * @param {{ fullNames: string[], bases: string[] }} input
+ * @param {unknown[]} params 会被就地追加绑定值
+ */
+function buildMetricPredicate(input, params) {
+  const clauses = [];
+  if (input.fullNames.length > 0) {
+    params.push(input.fullNames);
+    clauses.push(`metric = ANY($${params.length}::text[])`);
+  }
+  for (const base of input.bases) {
+    params.push(base);
+    const p = `$${params.length}`;
+    clauses.push(`(metric = ${p} OR (metric >= ${p} || '{' AND metric < ${p} || '}'))`);
+  }
+  // 请求里不可能啥也没有（路由层已保证非空），但空谓词会退化成"扫全表"，故显式 FALSE
+  return clauses.length > 0 ? `(${clauses.join(' OR ')})` : 'FALSE';
+}
+
+/**
+ * 取窗口内**实际存在**的序列全名（基名已展开成各维度序列）。
+ *
+ * ⚠️ 先取名字、再取点，是为了在**拉数据之前**就能对"展开后有多少条序列"设闸门：
+ *    一个 `disk.used_pct` 在 30 个挂载点的机器上会展开成 30 条线，
+ *    等把 30 × 8640 个点拉回来再判断，DB 和内存已经白烧了。
+ *
+ * @param {import('pg').Pool} pool
+ * @param {object} input
+ * @param {string} input.agentId
+ * @param {Date} input.from 已对齐到桶边界的下界
+ * @param {Date} input.to 已对齐到桶边界的上界（**排他**）
+ * @param {'30s'|'1m'|'5m'} input.step
+ * @param {string[]} input.fullNames 全名（精确匹配）
+ * @param {string[]} input.bases 基名（精确 + 前缀展开）
+ * @param {number} input.limit 最多返回多少条（调用方给 `上限 + 1`，用来判断"是否超限"）
+ * @returns {Promise<string[]>} 按 `metric` 升序
+ */
+export async function listSeriesNamesInRange(pool, input) {
+  const tier = METRIC_STEPS[input.step];
+  if (!tier) throw new AppError('invalid_request', { message: `未知时序档位：${input.step}` });
+
+  const params = [input.agentId, input.from, input.to];
+  const predicate = buildMetricPredicate(input, params);
+
+  const { rows } = await pool.query(
+    `SELECT DISTINCT metric
+       FROM ${tier.table}
+      WHERE agent_id = $1::uuid
+        AND ${tier.timeColumn} >= $2::timestamptz
+        AND ${tier.timeColumn} <  $3::timestamptz
+        AND ${predicate}
+      ORDER BY metric
+      LIMIT ${Number(input.limit)}`,
+    params,
+  );
+  return rows.map((row) => row.metric);
+}
+
+/**
+ * 取窗口内每条序列的**点**（已按档位落桶）。
+ *
+ * ⛔ **缺失的桶不补 0、不补 null**：桶里没有样本就是"没采集到"，
+ *    补 0 会把"采集断了"画成"CPU 掉到 0"（那种假数据事后没人查得出来）。
+ *    前端按点与点之间的空档直接断线。
+ *
+ * @param {import('pg').Pool} pool
+ * @param {object} input 同 {@link listSeriesNamesInRange}，另加：
+ * @param {'avg'|'max'|'min'|'last'} input.agg
+ * @returns {Promise<Array<{ metric: string, bucket: Date, value: number, n: number|null }>>}
+ *          按 `metric, bucket` 升序
+ */
+export async function selectSeriesPointsInRange(pool, input) {
+  const tier = METRIC_STEPS[input.step];
+  if (!tier) throw new AppError('invalid_request', { message: `未知时序档位：${input.step}` });
+  const agg = AGG_EXPRESSION[input.agg];
+  if (!agg) throw new AppError('invalid_request', { message: `未知聚合方式：${input.agg}` });
+
+  const params = [input.agentId, input.from, input.to];
+  const predicate = buildMetricPredicate(input, params);
+
+  // 原始层要自己落桶（`ts` 是接收时刻，未必落在整 30 秒上）；降采样层的 `bucket` 建表时已对齐
+  const bucketExpression =
+    tier.alignedColumn ??
+    `to_timestamp(floor(extract(epoch from ${tier.timeColumn}) / ${tier.sizeS}) * ${tier.sizeS})`;
+  const valueExpression = tier.alignedColumn ? agg.downsampled : agg.raw;
+  const nExpression = tier.alignedColumn ? 'max(n)' : 'count(*)::int';
+
+  const { rows } = await pool.query(
+    `SELECT s.metric, s.bucket, s.value, s.n
+       FROM (
+         SELECT metric,
+                ${bucketExpression} AS bucket,
+                ${valueExpression} AS value,
+                ${nExpression} AS n
+           FROM ${tier.table}
+          WHERE agent_id = $1::uuid
+            AND ${tier.timeColumn} >= $2::timestamptz
+            AND ${tier.timeColumn} <  $3::timestamptz
+            AND ${predicate}
+          GROUP BY 1, 2
+       ) s
+      WHERE s.value IS NOT NULL
+      ORDER BY s.metric, s.bucket`,
+    params,
+  );
+  return rows.map((row) => ({
+    metric: row.metric,
+    bucket: row.bucket,
+    value: Number(row.value),
+    n: row.n === null || row.n === undefined ? null : Number(row.n),
+  }));
 }

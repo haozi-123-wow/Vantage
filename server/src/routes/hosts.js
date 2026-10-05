@@ -35,6 +35,13 @@ import {
 } from '../services/status.service.js';
 import { AppError } from '../utils/errors.js';
 import { parseTimeParam, parseTimeWindow } from '../utils/time.js';
+import {
+  METRIC_AGG_DEFAULT,
+  METRIC_AGG_VALUES,
+  METRIC_STEP_VALUES,
+  getPanelMetricSeries,
+  parseMetricsParam,
+} from '../services/metricQuery.service.js';
 
 /** 私有列表里 `status` 的合法取值（三态齐全，⛔ 与公开侧的两种不同） */
 const STATUS_VALUES = ['online', 'offline', 'disabled'];
@@ -70,6 +77,30 @@ function parseBoundedLimit(raw, { field, def, max, logger }) {
     return max;
   }
   return value;
+}
+
+/**
+ * 解析枚举参数（`step` / `agg`）。
+ * ⚠️ 与 `limit` 同理：`coerceTypes: false` + query string 里的值永远是字符串，
+ *    用 schema 的 `enum` 声明会让 `?step=1m` 直接 400。
+ */
+function parseEnumParam(raw, { field, allowed, def }) {
+  if (raw === undefined || raw === '') return def;
+  if (typeof raw !== 'string' || !allowed.includes(raw)) {
+    throw new AppError('schema_invalid', { details: { field, allowed } });
+  }
+  return raw;
+}
+
+/**
+ * 解析布尔参数（`include_n`）。
+ * ⛔ 只认 `true`/`false`/`1`/`0`：`Boolean('false') === true` 那种写法会把"关"读成"开"。
+ */
+function parseBooleanParam(raw, { field, def }) {
+  if (raw === undefined || raw === '') return def;
+  if (raw === 'true' || raw === '1') return true;
+  if (raw === 'false' || raw === '0') return false;
+  throw new AppError('schema_invalid', { details: { field, allowed: ['true', 'false'] } });
 }
 
 /** 与 `services/status.service.js` 的公开快照结构**逐字相同**（同一张表格组件两边复用） */
@@ -311,6 +342,45 @@ const PROCESS_SNAPSHOT_SCHEMA = {
   },
 };
 
+/**
+ * `GET /api/v1/hosts/{id}/metrics` 的响应（✅ 2026-10-05 定稿，docs/api.md §4.3）。
+ *
+ * ⚠️ `labels` 是**任意键**对象（维度名不固定）→ 必须 `additionalProperties: true`，
+ *    否则 fast-json-stringify 会把它序列化成 `{}`（见 PANEL_HOST_DETAIL_SCHEMA 那段说明）。
+ */
+const METRIC_SERIES_RESPONSE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['host_id', 'step', 'agg', 'from', 'to', 'series', 'updated_at'],
+  properties: {
+    host_id: { type: 'string' },
+    // 实际使用的档位（`step=auto` 时由服务端选定）—— 前端画横轴要用它，⛔ 不是请求里那个值
+    step: { type: 'string', enum: ['30s', '1m', '5m'] },
+    agg: { type: 'string', enum: [...METRIC_AGG_VALUES] },
+    // ⚠️ 回显的是**对齐到桶边界之后**的时间（下界向下取整、上界向上取整），前端请直接用
+    from: { type: 'string' },
+    to: { type: 'string' },
+    series: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['metric', 'base', 'labels', 'unit', 'points'],
+        properties: {
+          metric: { type: 'string' },
+          base: { type: 'string' },
+          labels: { type: 'object', additionalProperties: true },
+          unit: { type: ['string', 'null'] },
+          // 点 = `[ts_ms, value]`；`?include_n=true` 时是 `[ts_ms, value, n]`
+          // ⚠️ 元素类型带 `null` 是给 `n` 用的（降采样层的 `n` 列可空）
+          points: { type: 'array', items: { type: 'array', items: { type: ['number', 'null'] } } },
+        },
+      },
+    },
+    updated_at: { type: 'string' },
+  },
+};
+
 /** 路径参数 `id` 必须是 UUID（非法值 → 400 `schema_invalid`，⛔ 不让它撞到 SQL 的 22P02） */
 const HOST_ID_PARAMS_SCHEMA = {
   type: 'object',
@@ -500,6 +570,42 @@ export async function registerHostRoutes(app) {
       const snapshot = await getPanelProcessSnapshot({ pool, config, id: request.params.id, at });
       if (snapshot === null) throw notFound(request.params.id);
       return snapshot;
+    },
+  );
+
+  /**
+   * GET /api/v1/hosts/{id}/metrics —— 历史曲线（时序查询，✅ 2026-10-05 定稿）。
+   *
+   * 契约要点（完整口径见 docs/api.md §4.3）：
+   *  · `step` 只有 `auto` / `30s` / `1m` / `5m`（⛔ 没有 `15s`：上报周期是 30s）；
+   *  · `auto` 时选**最细**的档使点数 ≤ 2000，都不满足就用 5m —— 恰好等于前端的 5 个预设按钮；
+   *  · 两道闸门（展开后 ≤ 20 条序列、总点数 ≤ 5 万）超出即 400，⛔ **不截断**；
+   *  · 指标名合法但该机没有 → 200 + `series: []`（⛔ 不是 404）。
+   */
+  app.get(
+    '/api/v1/hosts/:id/metrics',
+    { ...hostScoped, schema: { ...hostScoped.schema, response: { 200: METRIC_SERIES_RESPONSE_SCHEMA } } },
+    async (request) => {
+      const query = request.query ?? {};
+
+      // ⚠️ 校验顺序 = 契约 §4.3 的参数表顺序（`metrics` 在最前）。全部缺失时报的是**第一个**缺失项，
+      //    这个顺序是契约的一部分：前端按 field 高亮哪个输入框，不该随实现顺序变。
+      const target = parseMetricsParam(query.metrics);
+
+      const from = parseTimeParam(query.from, 'from');
+      const to = parseTimeParam(query.to, 'to');
+      if (from === null) throw new AppError('schema_invalid', { details: { field: 'from', reason: 'required' } });
+      if (to === null) throw new AppError('schema_invalid', { details: { field: 'to', reason: 'required' } });
+
+      const step = parseEnumParam(query.step, { field: 'step', allowed: METRIC_STEP_VALUES, def: 'auto' });
+      const agg = parseEnumParam(query.agg, { field: 'agg', allowed: METRIC_AGG_VALUES, def: METRIC_AGG_DEFAULT });
+      const includeN = parseBooleanParam(query.include_n, { field: 'include_n', def: false });
+
+      const result = await getPanelMetricSeries({
+        pool, config, logger: log, id: request.params.id, from, to, step, agg, includeN, ...target,
+      });
+      if (result === null) throw notFound(request.params.id);
+      return result;
     },
   );
 }

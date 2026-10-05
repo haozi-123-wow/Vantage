@@ -338,19 +338,32 @@ export interface HostMetricsQuery {
   metrics: string[]
   from: string | number
   to: string | number
-  /** 只允许 `auto` / `15s` / `1m` / `5m`；⛔ 前端不自行聚合（docs/frontend.md §6.2） */
-  step?: 'auto' | '15s' | '1m' | '5m'
-  agg?: 'avg' | 'max' | 'min'
-  limit?: number
-  cursor?: string
+  /**
+   * `auto`（默认）时由服务端按范围选档，并在响应里回传**实际**档位。
+   * ⛔ **没有 `15s`**：Agent 默认上报周期是 30s，比它还细的网格会出现一半空桶（✅ 2026-10-05 定）。
+   * 📐 `auto` 规则 = "选最细的档使点数 ≤ 2000"，换算下来就是
+   *    1h/6h → `30s`、24h → `1m`、7d/30d → `5m`（前端无需自己维护这张表）。
+   */
+  step?: 'auto' | '30s' | '1m' | '5m'
+  /** 四者在降采样层都是**预先算好的列**（`v_avg`/`v_min`/`v_max`/`v_last`），零额外成本 */
+  agg?: 'avg' | 'max' | 'min' | 'last'
+  /** 传 true 时点为 `[ts, value, n]`，`n` = 桶内样本数（数据完整度标注用） */
+  include_n?: boolean
 }
 
 export interface HostMetricsResponse {
-  /** 服务端回传的**实际** step（`auto` 时由服务端选档） */
-  step: string
+  host_id: string
+  /** 服务端回传的**实际** step（`auto` 时由服务端选档）—— 图表角落显示它 */
+  step: '30s' | '1m' | '5m'
+  agg: 'avg' | 'max' | 'min' | 'last'
+  /**
+   * ⚠️ 已**对齐到桶边界**（下界向下取整、上界向上取整），画横轴请直接用这两个值，
+   *    ⛔ 不要用请求里那个，否则会差一格。
+   */
   from: string
   to: string
   series: MetricSeries[]
+  updated_at: string
 }
 
 /**

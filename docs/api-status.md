@@ -28,13 +28,13 @@
 | 离线判定（`offline_sweep` 定时任务） | ✅ 已落地（2026-10-04） | 本文件 §4.4；`database.md` §8.2 |
 | 公开只读快照（`/api/public/*` 四个端点） | ✅ 已落地（2026-10-04） | `api.md` §3.2；方案 `docs/server-status-api.md`；决策见本文件 §4.6 |
 | 主机列表 / 汇总 / 详情 / 探活历史 / IP 时间线 / 进程 Top | ✅ 已落地（2026-10-04） | `api.md` §4.2；决策见本文件 §4.6 |
-| 主机时序查询（`/hosts/{id}/metrics`） | ⏳ 未实现（M2 最后一块，参数待定稿） | `api.md` §4.3；待拍板索引见本文件 §5.2 |
+| 主机时序查询（`/hosts/{id}/metrics`：历史曲线） | ✅ 已落地（2026-10-05；参数全部定稿） | `api.md` §4.3；决策见本文件 §4.8 |
 | 添加 Agent（`POST /api/v1/agents`：签发凭证，明文仅一次） | ✅ 已落地（2026-10-04） | `api.md` §4.4；决策见本文件 §4.7 |
 | Agent 管理的其余端点（列表 / 详情 / PATCH / rotate / disable｜enable / revoke / rotate-reminder-test） | ⏳ 未实现（M3；两处待定稿见 §4.7） | `api.md` §4.4 |
 | 告警 / 通道 / 静默 / 设置 / 用户 / 审计查询 | ⏳ 未实现（M3） | `api.md` §4.5–§4.10 |
 | WebSocket（`/ws/*`） | ⏳ 未实现（M3） | `api.md` §5 |
 
-**当前可用端点数 = 28**：3 个探针 + 2 个 Agent 上报端点 + 13 个认证会话端点 + 4 个公开状态端点 + 5 个私有状态端点 + 1 个 Agent 管理端点（`api.md` §4.1/§3.2/§4.2/§4.4）。
+**当前可用端点数 = 29**：3 个探针 + 2 个 Agent 上报端点 + 13 个认证会话端点 + 4 个公开状态端点 + 6 个私有状态端点 + 1 个 Agent 管理端点（`api.md` §4.1/§3.2/§4.2/§4.4）。
 **未实现端点当前调用会命中 404 `not_found`**（路由未注册 → §1.3 统一错误信封）。
 
 ---
@@ -396,6 +396,39 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 
 ---
 
+### 4.8 历史曲线落地（`GET /api/v1/hosts/{id}/metrics`，2026-10-05）
+
+**交付**：`src/repositories/metric.repo.js`（`METRIC_STEPS` + 两个只读查询）、`src/services/metricQuery.service.js`（选档/对齐/两道闸门/成形）、`src/routes/hosts.js` 的 `GET /hosts/:id/metrics`；`errors.js` 新增错误码 `too_many_series`。
+**测试**：`server/test/hosts.metrics.test.js`（**19 例**）。
+
+| # | 决议 | 理由（一句话） |
+|---|---|---|
+| **G1** | 档位定为 `30s` / `1m` / `5m`，**删掉 `15s`** | Agent 默认上报周期在修订 G3 里已是 **30s**（`agent/internal/config/config.go`）；15s 的网格会让每两个桶空一个，前端看起来像"一直在丢采集"——这是"假离线"那批过期数字的同一批残留 |
+| **G2** | **最长只看 30 天**，⛔ 不在降采样表上再聚合（不做 30m / 1h / 6h 档） | 现有三张表（raw 15 天 / 1m 90 天 / 5m 365 天）直接够用，**零新增数据路径** |
+| **G3** | 最细档 = **上报周期**（30s），不是一个手抄的数字 | 档位宁可偏粗：30s 网格查 15s 上报的机器只是每桶 2 个样本（`agg` 处理掉），不会出现空桶；反过来（15s 网格查 30s 上报）必然一半空桶 |
+| **G4** | 闸门 A：展开后序列数 ≤ **20**；闸门 B：序列数 × 桶数 ≤ **50,000** | 30 天档一条线本身就是 8640 点，**单条线的点数没有收紧余地**，闸门只能长在"总量"上；换算下来只有 30 天档会撞 B（**5 条**），其余四档都是 A（20 条） |
+| **G5** | 超限 → 400 `too_many_series`，⛔ **绝不截断**，且 `details` 带 `max_series_at_this_range` | 悄悄少画几条线在图表上完全看不出来；前端拿这个数去限制勾选框，正常用户撞不到这条错误 |
+| **G6** | `step=auto` = **选最细的档使点数 ≤ 2000，都不满足就用 `5m`** | 这一条规则恰好复现产品的 5 个预设按钮（1h/6h/24h/7d/30d → `30s`/`30s`/`1m`/`5m`/`5m`），所以接口**不需要**再加 `window=1h` 之类的预设参数 |
+| **G7** | `agg` = `avg`(默认) / `max` / `min` / `last`；`?include_n=true` 回传桶内样本数 | 降采样层把 `v_avg`/`v_min`/`v_max`/`v_last`/`n` **都预先存好了** ⇒ 这些全是"读哪一列"，零额外成本（原契约"仅降采样层支持 min/max"的悬念据此消解） |
+| **G8** | 基名展开用**区间比较** `[base\|\|'{', base\|\|'}')`，⛔ 不用 `LIKE` | `_` 是 LIKE 的单字符通配符，而本项目基名大量使用下划线（`used_pct` / `rx_bps`）——与 `selectLatestSeriesForAgents` 同一口径 |
+| **G9** | `from`/`to` **向外对齐到桶边界**并**原样回显** | 不对齐就会悄悄丢掉第一个（或最后一个）不完整的桶；回显的是"这张图实际覆盖的时间"，前端画横轴要直接用它 |
+| **G10** | 缺失桶**既不补 0 也不补 null**，只是不出现；指标名合法但该机没有 → **200 + `series: []`** | 补 0 会把"采集断了"画成"CPU 掉到 0"（事后没人查得出来）；"这台机没有 GPU"不是客户端的错 |
+
+**⚠️ 实现期踩到并已加防线的一个坑（值得记住）**：
+**`metrics` 参数不能用 `split(',')` 切分** —— 序列全名的**维度分隔符本身就是逗号**
+（`disk.used_pct{device=sda1,mount=/data}`），直接切会把它劈成两条非法名字（实测 400）。
+修法是只按**花括号之外**的逗号切（`metricQuery.service.js` 的 `splitMetricList()`），
+并留了一条专门的回归用例（"一条请求里写两个带维度的全名都要认"）。契约文字已同步（`api.md` §4.3）。
+
+**另一处已同步的口径**：请求什么都不给时**先报 `metrics`**（= 契约参数表的顺序），不是先报 `from` ——
+前端按 `details.field` 高亮输入框，这个顺序也是契约的一部分。
+
+**⏳ 顺带记账（本轮未动）**：`metrics_1m` / `metrics_5m` 目前**只有人写、没人读**（唯一读者是保留期清理任务），
+本接口是它们的**第一个读者**；且按 G1–G2 的口径，`1m` 层实际只服务"24 小时"这一档。
+是否缩短 `RETENTION_METRICS_1M_DAYS`（现 90 天）/ `RETENTION_METRICS_5M_DAYS`（现 365 天）需要一次单独确认（涉及删数据）。
+
+---
+
 ## 5. 待拍板索引
 
 > 规则（2026-10-04）：`api.md` 正文**只写已定契约**；下列条目尚未拍板，实现到对应模块前必须逐条定稿。⚠️ 为了不让 M2/M3 的端点失去可读的草案，提案表格仍留在 `api.md` 端点旁边，但**状态以本表为准**（未拍板 = 随时可改）。
@@ -419,7 +452,7 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 | `GET /api/v1/hosts/{id}/probes`（§4.2） | ✅ 2026-10-04 已定：`from`/`to`（默认 24h、上限 30 天）+ `name`/`type`；按 probe 分组返回 `availability`（**整窗口**）/`latest`/`results`（每 probe 最多 500 点） |
 | `GET /api/v1/hosts/{id}/ip-history`（§4.2） | ✅ 2026-10-04 已定：`limit`（默认 100/上限 500，两个列表各自适用）；返回 `intervals` + `events` + `current_ip` |
 | `GET /api/v1/hosts/{id}/processes`（§4.2） | ✅ 2026-10-04 已定：`at` 省略取最近一条、给定时取"该时刻之前最近一条"；无数据时 `at/total/top` 三者同 null |
-| `GET /api/v1/hosts/{id}/metrics`（§4.3） | `step` 取值集合（`auto`/`15s`/`1m`/`5m`）、`agg` 取值（`avg`/`max`/`min`，且仅降采样层支持 `min`/`max`）、基名展开口径（区间比较而非 LIKE）、档位范围表（15s≤6h / 1m≤30d / 5m≤1y）、展开后 series ≤20 与单 series 点数 ≤2000、响应格式（`series[].metric/base/labels/points`，缺失桶不补 0）、`?include_n=true` |
+| `GET /api/v1/hosts/{id}/metrics`（§4.3） | ✅ 2026-10-05 **已全部定稿并落地**：档位 `auto`/`30s`/`1m`/`5m`（**删掉 `15s`**）、`agg` = `avg`/`max`/`min`/`last` + `?include_n=true`、基名展开用区间比较、最长 30 天且不做再聚合、`step=auto` = "最细且点数 ≤2000"、两道闸门（≤20 条序列 / ≤5 万点）超限 400 不截断、响应含 `host_id`/实际 `step`/`agg`/对齐后的 `from`·`to`、缺失桶不出现在数组里 —— 见 §4.8 |
 | `GET /api/v1/agents`（§4.4） | ⏳ 待定：列表字段（现表缺 `id`/`name`/`display_name`/`tags`/`public_slug`/`created_at`/`disabled_at`）、是否支持 `?status=` 过滤、以及 `status: active\|disabled\|revoked` 与库表（`online/offline/disabled`）的冲突怎么收（见 §4.7 的两处未定稿） |
 | `POST /api/v1/agents/{id}/revoke`（§4.4） | ⏳ 待定："吊销"如何落库（库内无 `revoked_at`/`revoked`）——加迁移拆成"连接状态 + 凭证状态"，还是并入 `disabled`（见 §4.7 建议） |
 | `POST /api/v1/alert-rules/{id}/dry-run`（§4.5） | 试算窗口与返回字段（「若启用会触发几次」，不发送） |
@@ -439,6 +472,7 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 
 | 日期 | 变更 |
 |---|---|
+| 2026-10-05 | **历史曲线接口落地**（`GET /api/v1/hosts/{id}/metrics`，M2 收尾）：新增 `services/metricQuery.service.js`、`metric.repo.js` 的 `METRIC_STEPS` + 两个只读查询、`routes/hosts.js` 的 `GET /hosts/:id/metrics`；新增错误码 `too_many_series`；`api.md` §4.3 的 ❓ 全部定稿。**关键口径**：档位 `30s`/`1m`/`5m`（**删掉 `15s`** —— 上报周期是 30s）、最长 **30 天**且不做跨表再聚合、`step=auto` = "选最细的档使点数 ≤2000"（恰好复现 5 个预设按钮）、两道闸门（展开后 ≤20 条序列、总数 ≤5 万点）超限 400 **不截断**、缺失桶不补 0、`from`/`to` 向外对齐到桶边界后回显。决议 G1–G10 见 §4.8。⚠️ 记一条实现坑：**`metrics` 不能用 `split(',')` 切分**（全名的维度分隔符就是逗号），只能按花括号外的逗号切，已留回归用例 |
 | 2026-10-04 | **添加 Agent 接口落地**（`POST /api/v1/agents`）：新增 `routes/agents.js`、`services/agentAdmin.service.js`、`agent.repo.js::insertAgent()`；新增 env `AGENT_INSTALL_SCRIPT_URL`（未配置则不给安装命令，⛔ 不给占位符假命令）；`install_hint` 由契约初稿的 `string` **改为对象**（三段命令 + 风险提示 + warnings）；一键命令补上 `VANTAGE_SECRET`（原 `agent.md` §12.1 漏写，已同步）；新增审计动作 `agent.create`；决议 F1–F9 与两处待定稿见 §4.7；前端 `agentsApi.create()` 与类型已就位（`vue-tsc` 通过）。⚠️ 记一条测试坑：PGlite 适配器必须给 `pool.connect()`（上报落库走 `withTransaction`），且清理顺序要按外键（`agent_ip_history` 等 RESTRICT） |
 | 2026-10-04 | **状态类接口收尾（第二批）**：新增 `GET /api/v1/summary`（契约新增）、`/api/v1/hosts/{id}`、`/{id}/probes`、`/{id}/ip-history`、`/{id}/processes`、`GET /api/public/hosts/{slug}/now`、`GET /api/public/probes`；新增 `utils/time.js`、`utils/ip.js::isPrivateAddress()`、两个公开缓存子键（`database.md` §7 已登记）；决议 E1–E10 见 §4.6.1；`api.md` §3.2/§4.2 全部改为 ✅ 并写死契约（清理了三处旧草案形状）；前端类型声明同步（`vue-tsc` 通过）。⚠️ 记一条教训：**fast-json-stringify 对任意键对象默认序列化成 `{}`**，透传 JSONB 必须写 `additionalProperties: true` |
 | 2026-10-04 | **服务器状态接口落地（第一批）**：`/api/public/hosts`、`/api/public/summary`、`/api/v1/hosts`：新增 `status.service.js`（唯一推导）、`routes/public.js`、`routes/hosts.js`、`middleware/publicView.js`、`createPublicRateLimiter()`；新增 env `PUBLIC_CACHE_TTL_S`（默认 10s）与两个 Redis 键（`snapshot:public:hosts|summary`，已登记 `database.md` §7）；D2-a/D3-a/D4-a/D8-a 与 D-名/D-禁/D-键/D-限流/D-tag/D-范围 全部按方案建议落地 → 新增 §4.6，`api.md` §3.2/§4.2 状态改为 ✅，前端类型声明（`web/src/api/public.ts`、`private.ts`、`types/domain.ts`）同步修正为 `{items, next_cursor}` |

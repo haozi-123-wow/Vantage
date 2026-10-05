@@ -256,8 +256,8 @@ web/
 | Props | `series`（来自 `/metrics` 或实时缓冲）、`unit`、`step`、`height`、`theme`、`loading`、`error`、`showMinMax` |
 | **序列标识（✅ 本轮决策）** | 指标名 = `基名{维度=值}` 全名（`docs/database.md` §5.7.2）。`series.metric` 是权威键（用作 ECharts `series.id`），`series.base` 用于**分组**（同一基名一组、可折叠），`series.labels` 用于**图例文案**（显示 `/data`、`eth0`、`GPU 0`）；解析/拼装走 `utils/metrics.js` 的 `parseMetric`/`buildMetric`，⛔ 不在组件里手写字符串拼接 |
 | 数据源分层 | 历史由 `/api/v1/hosts/{id}/metrics` 拉取（按 `step` 档位）；**实时增量**由 `realtime` store 追加到尾部（仅「当前值」，不参与历史重算） |
-| 缺失处理 | 缺失桶**不补 0**（`docs/api.md` §4.3）：用 `null` 使曲线断开；同时在工具提示标注「无数据」 |
-| 点数上限 | 单 series 建议 ≤ 1000 渲染点；超限由服务端降档（`step=auto`）或前端二次抽稀（➕ 建议：优先让服务端降档） |
+| 缺失处理 | 缺失桶**不补 0 也不补 null**，数组里直接没有那个点（`docs/api.md` §4.3）：前端按时间轴的空档断线（`connectNulls: false` / 逐点定位），并在 tooltip 里标注「无数据」。⛔ 代码里不要 `?? 0` 兜底 |
+| 点数上限 | **不是前端的事**（✅ 2026-10-05 定）：一条线的点数由服务端档位决定（30s/1m/5m，最多为 30 天档的 8640 点/条），⛔ 前端**不做二次抽稀** —— 抽稀会把尖刺整段抹掉。前端要做的只有一件事：**按当前范围限制可勾选的序列数**（服务端在 400 的 `details.max_series_at_this_range` 里给出上限；30 天档是 5 条，其余档 20 条） |
 | 单位格式 | 统一走 `utils/units.js`：`%`、bytes（自动 B/KiB/MiB/GiB/TiB）、bytes/s、℃、W、次/s、ms |
 | 交互 | 十字准星 + 共享 tooltip、`dataZoom`（拖动选择时间窗）、图例可切换序列、双击重置 |
 | 主题 | 明/暗两套（跟随 `ui.js` 偏好 + `prefers-color-scheme`）；ECharts 主题注册一次，切换时 dispose 重建 |
@@ -277,7 +277,8 @@ web/
 | GPU | `gpu.util`、`gpu.mem_used/mem_total`、`gpu.temp`、`gpu.power`（维度 `{index}`） | 无 GPU 时整块隐藏（`capabilities` 驱动） |
 | 探活 | 状态时间条（up/down 色块）+ 延迟折线 | 用 `ProbeTable`，非 ECharts 或轻量 bar |
 
-⛔ 前端**不自行聚合**（如把 15s 数据在浏览器端降采样成大范围曲线）——一律由服务端按 `step` 返回（✅ §9「前端长周期图表只查降采样层」）。
+⛔ 前端**不自行聚合、也不自行抽稀**（如把 30s 数据在浏览器端降采样成大范围曲线）——一律由服务端按 `step` 返回（✅ §9「前端长周期图表只查降采样层」）。
+✅ **时间范围选择器与档位的对应关系不用前端硬编码**：`TimeRangePicker` 只传 `from`/`to`，服务端按 `step=auto` 的规则选档并在响应里回传**实际** `step`（1h/6h→`30s`、24h→`1m`、7d/30d→`5m`）；前端把回传的 `step` 显示在图表角落即可（`docs/api.md` §4.3 有完整对照表）。
 
 ---
 

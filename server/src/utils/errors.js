@@ -20,6 +20,13 @@ export const ERROR_CODES = Object.freeze({
   invalid_request: { status: 400, message: '请求不可解析或缺少必需字段' },
   schema_invalid: { status: 400, message: '字段校验失败（白名单外字段 / 数值超范围 / 数组超长）' },
   range_too_large: { status: 400, message: '查询范围超出该精度档允许的最大跨度' },
+  /**
+   * 时序查询的两道闸门（docs/api.md §4.3）：展开后的序列数 > 20，或「序列数 × 桶数」> 5 万。
+   * ⚠️ 刻意**不截断**：悄悄少画几条线在图表上完全看不出来，是最难排查的一类错误。
+   *    400 的 details 会给出「本范围下最多能选几条序列」（`max_series_at_this_range`），
+   *    前端据此把维度勾选框限制住 —— 正常用户撞不到这条错误。
+   */
+  too_many_series: { status: 400, message: '展开后的序列数或总点数超出上限，请收窄指标或时间范围' },
   expr_not_allowed: { status: 400, message: '本期不接受表达式（expr 必须为 null，零 RCE 约束）' },
   unknown_setting: { status: 400, message: '未知的设置项 key（不在白名单内）' },
   invalid_setting_value: { status: 400, message: '设置项的值类型不符合该 key 的定义' },

@@ -65,7 +65,7 @@
 | GET | `/api/v1/hosts` | 主机列表（含 IP） | Cookie | ✅ | §4.2 |
 | GET | `/api/v1/summary` | 面板汇总计数（在线/离线/禁用/告警） | Cookie | ✅ | §4.2 |
 | GET | `/api/v1/hosts/{id}` | 主机详情（+ 全序列当前值） | Cookie | ✅ | §4.2 |
-| GET | `/api/v1/hosts/{id}/metrics` | 时序查询 | Cookie | ⏳ | §4.3 |
+| GET | `/api/v1/hosts/{id}/metrics` | 时序查询（历史曲线） | Cookie | ✅ | §4.3 |
 | GET | `/api/v1/hosts/{id}/probes` | 探活历史 + 可用率 | Cookie | ✅ | §4.2 |
 | GET | `/api/v1/hosts/{id}/ip-history` | IP 变更时间线 | Cookie | ✅ | §4.2 |
 | GET | `/api/v1/hosts/{id}/processes` | 进程 Top 快照 | Cookie | ✅ | §4.2 |
@@ -190,6 +190,7 @@
 | 400 | `invalid_request` | 请求不可解析、缺必需字段、引用不存在（含：新旧密码相同、未 setup 就 enable） |
 | 400 | `schema_invalid` | 字段校验失败：白名单外字段、类型不符、数值超范围、数组超长 |
 | 400 | `range_too_large` | 时序查询范围超出该 step 允许的最大跨度（§4.3） |
+| 400 | `too_many_series` | 时序查询展开后的序列数 > 20，或「序列数 × 桶数」> 5 万（§4.3；`details.reason` = `series_limit` / `point_budget`） |
 | 400 | `expr_not_allowed` | 告警规则传了非 null 的 `expr`（零 RCE 约束，§4.5） |
 | 400 | `unknown_setting` | `PATCH /settings` 传了白名单外的 key（§4.10） |
 | 400 | `invalid_setting_value` | 设置项的值类型不符合该 key 的定义（§4.10） |
@@ -1088,7 +1089,7 @@ URL → **只留主机名**（⛔ 去掉路径/查询串/端口）；`host:port`
 > 写过一版形状（`{probes, current}` / `{ranges, events}` / `{ts, total, top}`）。那三版**已在 2026-10-04 落地时被上面的契约取代**
 > （分组 + 可用率、区间/事件双列表 + 当前 IP、`at`/`total`/`top` 三态可空）。⛔ 不要再沿用旧字段名。
 
-### 4.3 时序查询 `GET /api/v1/hosts/{id}/metrics`（✅ §10.2；标 ❓ 的参数仍待拍板，索引见 `docs/api-status.md` §5.2）
+### 4.3 时序查询 `GET /api/v1/hosts/{id}/metrics`（✅ 已落地 2026-10-05；参数全部定稿，决策记录见 `docs/api-status.md` §4.8）
 
 **查询参数**
 
@@ -1096,40 +1097,74 @@ URL → **只留主机名**（⛔ 去掉路径/查询串/端口）；`host:port`
 |---|---|---|
 | `metrics` | ✅ | 逗号分隔，元素可为**基名**或**全名**：`cpu.usage,mem.used_pct,disk.used_pct`（基名 = 该基名下**全部维度序列**，如所有挂载点）或 `disk.used_pct{mount=/data}`（全名 = 单一序列）。✅ 命名与转义规范见 `docs/database.md` §5.7.2（**已定：维度写进指标名**） |
 | `from` / `to` | ✅ | 时间范围 |
-| `step` | ❓ | `auto`（默认）/ `15s` / `1m` / `5m`；不允许其它值（防止对原始层做任意聚合） |
-| `agg` | ❓ | `avg`（默认）/ `max` / `min`（仅降采样层支持 `min/max`） |
+| `step` | ❌ | `auto`（默认）/ `30s` / `1m` / `5m`。✅ **⛔ 没有 `15s`**：Agent 默认上报周期是 30s，比它还细的网格会让每两个桶空一个，看起来像"一直在丢采集" |
+| `agg` | ❌ | `avg`（默认）/ `max` / `min` / `last`。✅ 四者在降采样层都是**预先算好的列**（`v_avg`/`v_min`/`v_max`/`v_last`），没有额外成本 |
+| `include_n` | ❌ | `true` / `false`（默认 false）。为 true 时点是 `[ts, value, n]`，`n` = 桶内样本数 |
 
-❓ 提案（基名展开的实现口径）：`metric = :base` **或**前缀命中，建议用**区间比较**而非 LIKE——`metric >= base || '{' AND metric < base || '}'`（避免 `%`/`_` 通配符转义问题；基名本身不含这两个字符）。
+✅ **基名展开的实现口径（已定）**：`metric = :base` **或**区间命中 `metric >= base || '{' AND metric < base || '}'`。
+⛔ 不用 `LIKE 'base{%'` —— `_` 在 LIKE 里是单字符通配符，而本项目基名大量使用下划线（`used_pct` / `rx_bps` / `ctx_switch`），会造成**潜在**的匹配污染。
 
-**档位与范围约束（❓ 提案，须在实现中硬校验）**
+⚠️ **`metrics` 的分隔符只认花括号之外的逗号**：序列全名的**维度分隔符本身就是逗号**，
+所以 `disk.used_pct{device=sda1,mount=/data}` 算**一个**元素；维度值里若真需要逗号，按 `docs/database.md` §5.7.2 必须写成 `%2C`。
+（这是"逗号分隔"与"命名规范"撞车撞出来的，实现时踩到过一次，已用回归用例钉住。）
 
-| step | 数据源 | 允许的最大范围 | 说明 |
-|---|---|---|---|
-| `15s` | `metrics_raw` | ≤ 6 小时 | 原始层仅保留 15 天，但窗口过大代价高 |
-| `1m` | `metrics_1m` | ≤ 30 天 | |
-| `5m` | `metrics_5m` | ≤ 1 年 | 长周期图表只查降采样层（✅ 设计 §9） |
+**档位与范围约束（✅ 已定：最长 30 天，⛔ 不做跨表再聚合）**
 
-`step=auto` 时由服务端按范围选档并在响应中回传**实际** step；超过最大范围 → 400 `range_too_large`（推荐前端先请求 `5m`）。
-❓ 提案：单请求**展开后** series 数 ≤ 20、单 series 点数 ≤ 2000，超限返回 400（防图表卡死与 DB 压力）；基名展开过多时前端应先收窄维度。
+| step | 数据源 | 一格多长 | 允许的最大范围 | 一条线最多多少点 |
+|---|---|---|---|---|
+| `30s` | `metrics_raw` | 30s（= 上报周期） | ≤ 24 小时 | 2,880 |
+| `1m` | `metrics_1m` | 60s | ≤ 7 天 | 10,080 |
+| `5m` | `metrics_5m` | 300s | ≤ 30 天 | 8,640 |
 
-**响应（❓ 提案格式，适配 ECharts）**
+**全局上限 30 天**（系统对外只承诺这么长的历史）。超过该档上限或全局上限 → 400 `range_too_large`，`details` 带 `step` / `max_span_s` / `span_s`。
+
+🔑 **`step=auto` 的规则（✅ 已定）：选最细的一档使点数 ≤ 2000，都不满足就用最粗的 `5m`**；响应里回传**实际**用的 step。
+这条规则恰好等于产品上那 5 个预设按钮 —— 所以前端只传 `from`/`to` 即可，**不需要**再加 `window=1h` 之类的预设参数：
+
+| 前端按钮 | 实际档位 | 点数 |
+|---|---|---|
+| 1 小时 | `30s` | 120 |
+| 6 小时 | `30s` | 720 |
+| 24 小时 | `1m` | 1,440（`30s` 会是 2,880，超目标） |
+| 7 天 | `5m` | 2,016（`1m` 会是 10,080） |
+| 30 天 | `5m` | 8,640（已经是最粗档） |
+
+**两道闸门（✅ 已定；超限一律 400，⛔ 绝不截断）**
+
+| 闸门 | 限制 | 换算成用户看得见的东西 |
+|---|---|---|
+| A | 展开后**序列数 ≤ 20** | 一个 `disk.used_pct` 在 30 个挂载点的机器上会展开成 30 条线 |
+| B | **序列数 × 桶数 ≤ 50,000** | 1 小时～7 天档都是"最多 20 条"，**只有 30 天档是 5 条**（8,640 × 5 = 43,200，最坏响应 ≈1MB） |
+
+超限 → 400 `too_many_series`，`details` 带 `reason`（`series_limit` / `point_budget`）、
+`max_series_at_this_range`（**本范围下最多能选几条**，前端据此限制维度勾选框）与 `hint`。
+⛔ **不截断**：悄悄少画几条线在图表上完全看不出来，是最难排查的一类错误。
+⚠️ 闸门判定**先于取数**（先只取"展开后的序列名"，`LIMIT 上限+1`）—— 否则 30 × 8640 个点已经白捞回来了。
+
+**响应（✅ 已定格式，适配 ECharts）**
 
 ```json
 {
+  "host_id": "9f1c2e4a-…",
   "step": "1m",
+  "agg": "avg",
   "from": "2025-09-25T00:00:00.000Z",
   "to": "2025-09-25T06:00:00.000Z",
   "series": [
     { "metric": "disk.used_pct{device=sda1,mount=/data}", "base": "disk.used_pct",
       "labels": { "device": "sda1", "mount": "/data" }, "unit": "%",
       "points": [[1758758400000, 12.3], [1758758460000, 13.1]] }
-  ]
+  ],
+  "updated_at": "2025-09-25T06:00:03.000Z"
 }
 ```
 
-- `metric` = **权威序列全名**；`base` = 基名（前端按它分组）；`labels` = 由全名反解出的维度对象（**不等同于**公开视图的脱敏要求——这里已登录）。
-- `points` 用 `[ts_ms, value]` 二元数组压缩体积；缺失桶**不补 0**，由前端按 `null` 断线处理（避免把采集缺失画成 0）。
-- `n`（桶内样本数）可选用 `?include_n=true` 返回，供前端标注数据完整度（`docs/frontend.md`）。
+- `step` = **实际使用的档位**（`step=auto` 时由服务端选定）；`agg` = 实际使用的聚合方式。
+- ⚠️ `from` / `to` 回显的是**对齐到桶边界之后**的时间（下界向下取整、上界向上取整）。前端画横轴请直接用这两个值，⛔ 不要用请求里那个，否则会差一格。
+- `metric` = **权威序列全名**；`base` = 基名（前端按它分组）；`labels` = 由全名反解出的维度对象（**不等同于**公开视图的脱敏要求——这里已登录）；`unit` = 由 `unitOf(base)` 推出，未知基名为 `null`。
+- `points` 用 `[ts_ms, value]` 二元数组压缩体积，`ts` 是**桶起点**（UTC 对齐、毫秒）；缺失桶**既不补 0 也不补 null**，只是不出现，由前端按空档断线（补 0 会把"采集断了"画成"CPU 掉到 0"）。
+- `n`（桶内样本数）用 `?include_n=true` 返回，此时点是 `[ts_ms, value, n]`，供前端标注数据完整度（`docs/frontend.md`）。
+- ✅ **指标名合法、但这台机在窗口内没有这条序列** → 200 + `series: []`（⛔ 不是 404：「这台机没有 GPU」不是客户端的错）。
 
 ### 4.4 Agent 与凭证管理（需登录，✅ 全部仅 `admin`）
 
@@ -1507,7 +1542,7 @@ URL → **只留主机名**（⛔ 去掉路径/查询串/端口）；`host:port`
 6. `role='user'`（普通用户）的账号 POST 规则 → 403 `role_denied` + 审计。
 7. ✅ `/api/public/*` 响应体断言**不含** `last_ip`/`reported_ip`/内部 UUID/`agent_key`（⛔ 决策 #21；已覆盖：`server/test/status.service.test.js` 的"字段全填满的 agent"用例 + `server/test/public.api.test.js`）。
 8. ✅ 关闭 `public_view.enabled` → 公开接口全部 404（且改回后**同一个进程实例**立刻恢复 200，证明是每请求判定）。
-9. `metrics?from&to` 超出该 step 允许范围 → 400 `range_too_large`；`step=auto` 回传实际档位。
+9. ✅ `metrics?from&to` 超出该 step 允许范围 → 400 `range_too_large`；`step=auto` 回传**实际**档位（且该档位等于前端 5 个预设按钮的预期值）；`step=15s` → 400 `schema_invalid`（该档位已删除）；基名展开超过 20 条 → 400 `too_many_series`（`details.max_series_at_this_range` 给出本范围上限）；缺失桶**不补 0**（测试落点：`server/test/hosts.metrics.test.js`，19 例）。
 
 **以下为登录 / 改密 / 2FA 的专项验收用例（✅ = 已实现并有测试覆盖；测试落点与验收待办见 `docs/api-status.md` §2、§3.6）**
 

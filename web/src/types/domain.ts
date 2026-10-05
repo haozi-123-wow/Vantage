@@ -20,16 +20,25 @@ export type RealtimeStatus = 'connecting' | 'open' | 'closed' | 'degraded'
 /** 指标维度（由序列全名反解，docs/database.md §5.7.2） */
 export type MetricLabels = Record<string, string>
 
-/** 时序查询返回的单条序列（docs/api.md §4.3） */
+/** 一个曲线点：`[桶起点毫秒, 值]`；请求带 `include_n=true` 时为 `[桶起点毫秒, 值, 桶内样本数]` */
+export type MetricPoint = [ts: number, value: number, n?: number]
+
+/** 时序查询返回的单条序列（docs/api.md §4.3，✅ 2026-10-05 定稿） */
 export interface MetricSeries {
   /** 权威序列全名（含维度），如 `disk.used_pct{mount=/data}` */
   metric: string
   /** 基名，用于分组 */
   base: string
   labels: MetricLabels
-  unit: string
-  /** `[ts_ms, value]`；缺失桶为 null（⛔ 不补 0） */
-  points: Array<[number, number | null]>
+  /** 由服务端 `unitOf(base)` 推出；未知基名为 `null` */
+  unit: string | null
+  /**
+   * ⚠️ `ts` 是**桶起点**（UTC 对齐）。
+   * ⚠️ **缺失的桶不出现**（既不补 0 也不补 null，✅ 2026-10-05 定）——
+   *    画图时按时间轴空档断线（ECharts `connectNulls: false`），⛔ 代码里不要 `?? 0` 兜底，
+   *    那会把"采集断了"画成"CPU 掉到 0"。
+   */
+  points: MetricPoint[]
 }
 
 /** 实时环形缓冲里的一条序列（docs/frontend.md §5.3，建议每序列 300 点） */
