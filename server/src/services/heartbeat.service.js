@@ -9,7 +9,7 @@
  *
  * ⚠️ 状态机的两个方向分属两处，改任一处都必须同时想到另一处：
  *    `offline/从未上报 → online`  **本文件**（`touchAgent` → `updateAgentAfterReport` 的 CASE）
- *    `online → offline`            `services/offline.service.js`（每 30s 的 `offline_sweep` 定时任务）
+ *    `online → offline`            `services/offline.service.js`（每 60s 的 `offline_sweep` 定时任务）
  * 上报是请求驱动的，因此"机器掉线"这件事只能靠主动扫描发现（详见 offline.service.js 的文件头）。
  */
 

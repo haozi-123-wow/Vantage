@@ -1,13 +1,13 @@
 # Vantage 服务器状态接口方案（公开 + 私有）
 
 > **定位**：本文是「获取服务器状态」两个接口的**实施方案与待确认决策清单**，对应 `docs/api.md` §3.2（`/api/public/hosts`）与 §4.2（`GET /api/v1/hosts`）。
-> **状态**：✅ **已落地（2026-10-04，两批）**——第一批 3 个端点（`/api/public/hosts`、`/api/public/summary`、`/api/v1/hosts`），第二批 7 个（`/api/v1/summary` ➕、`/hosts/{id}`、`/probes`、`/ip-history`、`/processes`、`/api/public/hosts/{slug}/now`、`/api/public/probes`）；共 **73 个新测试**。逐条决议与实现偏差登记见 `docs/api-status.md` §4.6 / §4.6.1，校验步骤见该文件 §2（第 10–24 条）。**仅剩 `/api/v1/hosts/{id}/metrics`（时序查询，参数待定稿 §10）与两个 WS**。
+> **状态**：✅ **已落地（2026-10-04，两批）**——第一批 3 个端点（`/api/public/hosts`、`/api/public/summary`、`/api/v1/hosts`），第二批 7 个（`/api/v1/summary` ➕、`/hosts/{id}`、`/probes`、`/ip-history`、`/processes`、`/api/public/hosts/{slug}/now`、`/api/public/probes`）；共 **73 个新测试**。逐条决议与实现偏差登记见 `docs/api-status.md` §4.6 / §4.6.1，校验步骤见该文件 §2（第 10–24 条）。**后续的 `/api/v1/hosts/{id}/metrics`（2026-10-05 定稿并落地，见该文件 §4.8）与两个 WebSocket 频道（`/ws/public` · `/ws/live`，2026-10-05 落地，见该文件 §4.9）也均已完成。**
 > ⚠️ **例外（已完成）**：文档初稿后先落地了它的**前置件**——离线判定 `offline_sweep`（2026-10-04，
 > 见 `docs/api-status.md` §4.4）。原因：上报是请求驱动的，机器掉线时没有任何请求进来，`agents.status`
 > 会永远停在 `online`（**一个报平安的监控系统**），而且 `services/ingest.service.js` 已有的「离线→在线恢复广播」
 > 因该状态从未被写入而**永不执行**。§2.1 的结论随之更新为「cron 写回 + 接口读取时推导」两者都做。
 > **上位文档（冲突时以上位为准）**：`Vantage-DESIGN-v0.7.md`（内容已是 v0.8）→ `docs/api.md`（接口契约）→ `docs/database.md`（数据契约）→ `docs/frontend.md`（面板侧）。
-> **现有实现基线**：中心 18 个端点已落地（`/healthz` `/readyz` `/version` + 2 个 Agent 端点 + 13 个认证会话端点），`/api/public/*` 与 `/api/v1/hosts` 均为 ⏳ 未实现（`docs/api-status.md` §1）。**本方案是 M2 的第一块交付。**
+> **现有实现基线（初稿时，2026-10-04 动工前）**：中心 18 个端点已落地（`/healthz` `/readyz` `/version` + 2 个 Agent 端点 + 13 个认证会话端点），当时 `/api/public/*` 与 `/api/v1/hosts` 均为 ⏳ 未实现（`docs/api-status.md` §1）。**本方案是 M2 的第一块交付**；上面「状态」行所列端点现已全部落地。
 
 ---
 
@@ -39,19 +39,21 @@ server/src/routes/hosts.js                  —— /api/v1/hosts
 | # | 事实 | 落点 | 对实现的影响 |
 |---|---|---|---|
 | 1 | `agents.status` 的**离线扫描（`offline_sweep`）定时任务已落地**（2026-10-04，与本方案同批） | `server/src/services/offline.service.js` + `cron.service.js`（每 `HEARTBEAT_SWEEP_INTERVAL_S`=**60s**；阈值为 **30s × 3 = 90s**，见 §2.1） | ✅ **状态接口仍按读取时推导**（§2.1）——让接口的正确性不依赖 cron 的存活；但 `agents.status` 现在**已经是准确的**（可被告警引擎与 WS 消费） |
-| 2 | `snapshot:agent:<id>` 键已定义但**全仓库无写入方** | `server/src/utils/redisKeys.js` L45/L70/L135；`grep snapshot` 在 `src/` 下只有这一处定义 | 目前**没有现成缓存可读**。本方案改为「`/api/public/*` 响应级缓存（短 TTL）」，⛔ 不复用该键名（见 §2.4） |
+| 2 | `snapshot:agent:<id>` 键已定义但**全仓库无写入方** | `server/src/utils/redisKeys.js` L45；同前缀的 `snapshot:public:` 定义在 L52（本方案新增，是当前唯一有写入方的 `snapshot:` 子键） | 目前**没有现成缓存可读**。本方案改为「`/api/public/*` 响应级缓存（短 TTL）」，⛔ 不复用该键名（见 §2.4） |
 | 3 | 上报体里**没有 `uptime` 字段** | `docs/api.md` §2.1 的 `host` 对象只有 `{ hostname, os, kernel, arch?, boot_time, capabilities }` | `uptime` 必须由 `host_info.boot_time` 与 `now()` 推导（§3.3） |
 | 4 | 上报体里**没有 `mem_pct` / `disk_pct` / `net_*` 字段** | 同上；百分比是**中心就地算的派生序列**（`docs/api.md` §2.1 注 3） | snapshot 的五个数值全部要走「按基名取最新值 → 归一化」的推导，⛔ 不能指望某个"快照行" |
 | 5 | `alert_events` 表已建，但**告警引擎尚未实现** | `server/migrations/0006_alerting.sql`；`src/` 下无告警引擎代码 | `active_alerts` / `summary.alerts` 本期**只能查表得出 0**；文档字段保留、语义明确（§10） |
-| 6 | **公开限流器尚不存在** | `config.rateLimit.publicPerMinute`（默认 60）与 `RATELIMIT_PUBLIC_PER_MINUTE` 已在 `config/index.js` L412 / `.env.example` L114，但 `middleware/rateLimit.js` 里只有 Agent / 登录 / 滑块三个限流器 | 需新增 `createPublicRateLimiter()`（复用同一段固定窗口 Lua，§7.1） |
+| 6 | **公开限流器**已落地（2026-10-04，本方案实施时新增） | `middleware/rateLimit.js` 的 `createPublicRateLimiter()`（L193，复用同一段固定窗口 Lua）；同文件另有 `createWsRateLimiter()`（L236） | ✅ 已按本方案 §7.1 实现，独立桶 `ratelimit:public:<ip>` |
 | 7 | `public_view.enabled` 的白名单与默认值**已就绪** | `services/settings.service.js` L21（`SETTING_DEFAULTS['public_view.enabled'] = true`）+ `getSettingBool()` + `settings:cache` TTL 30s | 公开开关**零新增代码**即可读；⛔ 不要另建缓存或开关 |
-| 8 | 列表响应形状**已定**为 `{ items: [...], next_cursor }` | `docs/api.md` §1.2 ③（L144，2026-10-04 定） | 两个接口都必须套 `items` 壳；⚠️ 但 `web/src/api/public.ts` / `private.ts` 现在按**裸数组**声明（§9.1 需一并修正） |
+| 8 | 列表响应形状**已定**为 `{ items: [...], next_cursor }` | `docs/api.md` §1.2 ③（L144，2026-10-04 定） | 两个接口都必须套 `items` 壳；⚠️ 初稿时 `web/src/api/public.ts` / `private.ts` 按**裸数组**声明，✅ **§9.1 已全部修正** |
 | 9 | 公开页设计稿展示了**精确到秒的绝对时间** | `design/preview/public-status.html` L211「最后上报 12 秒前（2026-10-04 20:14:18 UTC+8）」 | `docs/api.md` §3.1 明确要求公开侧**只给相对化/分钟级**以避免行为指纹 → **设计稿此处需改**，本方案按契约实现（§9.2） |
 | 10 | 设计稿顶栏展示「在线 3 · 离线 1 · **禁用 1** · 活动告警 3」 | `design/preview/MOCK-DATA.md` L36 | §3.2 的 `summary` 字段表**没有 `disabled`** → 需补（§9.3） |
 
 ---
 
-## 2. 设计决策（8 项，**这是主要待你确认的部分**）
+## 2. 设计决策（8 项，**2026-10-04 已逐条拍板**）
+
+> ✅ **口径现状**：本节各处的「（待确认事项 X）」在 2026-10-04 已按 §11 的建议逐条拍板并落地（D1-a 除外，它已决议推迟到 M3）；逐条决议见 `docs/api-status.md` §4.6 / §4.6.1。
 
 ### 2.1 D1：在线/离线**在读取时推导**，⛔ 不直接读 `agents.status`
 
@@ -316,9 +318,9 @@ server/src/routes/hosts.js                  —— /api/v1/hosts
 |---|---|---|---|
 | `status` | 否 | `online` / `offline` / `disabled` | 过滤**推导后**的状态（⛔ 不是过滤 `agents.status` 列——否则 `online` 会连失联主机一起返回） |
 | `tag` | 否 | string | `agents.tags @> to_jsonb($x::text)`（走 `agents_tags_gin_idx`）；⚠️ D8 的「有问题优先」排序下它将**失去索引能力**（见待确认 D-tag） |
-| `q` | 否 | string ≤ 64 | 名称模糊搜索：`name ILIKE '%'||$x||'%' OR display_name ILIKE ...`（对 `%` `_` `\` 转义后再拼） |
+| `q` | 否 | string ≤ 64 | 名称模糊搜索（对 `name` 与 `display_name` 做 ILIKE；拼进 SQL 前先转义 `%`、`_`、`\`） |
 | `limit` | 否 | 默认 20、上限 200 | §2.8 |
-| `cursor` | 否 | — | ⛔ 本期不实现（§2.8）；传了忽略（或 400，见待确认 D8-a） |
+| `cursor` | 否 | — | ⛔ 本期不实现（§2.8）；传了**忽略**、⛔ 不 400（✅ D8-a 已定；见 §11） |
 
 **200**：`{ items: [...], next_cursor: null, updated_at }`，每项在公开字段之外**追加**：
 
@@ -434,8 +436,8 @@ SELECT p.agent_id,
 | 文件 | 改动 |
 |---|---|
 | `server/src/middleware/rateLimit.js` | ➕ `createPublicRateLimiter()`（复用 `FIXED_WINDOW_LUA`，窗口 60s，⛔ 不复制 Lua）；可选 `createPanelRateLimiter()`（待确认） |
-| `server/src/repositories/agent.repo.js` | ➕ `listAgentsForStatus(pool, filters)` / `countAgentsByEffectiveStatus()` / `countFiringAlertsBySeverity()` / `readDbNow()`。⚠️ **未**实现 `findAgentStatusBySlug()` / `findAgentStatusById()`：它们只服务 `/hosts/{slug}/now` 与 `/hosts/{id}`，而那两个端点按 §5.3 不在本块内 —— ⛔ 不做无人调用的死代码，随下一块一起加 |
-| `server/src/repositories/metric.repo.js` | ➕ `selectLatestSeriesByBase(pool, agentIds, bases, since)`（§4.2） |
+| `server/src/repositories/agent.repo.js` | ➕ `listAgentsForStatus(pool, filters)` / `countAgentsByEffectiveStatus()` / `countFiringAlertsBySeverity()` / `readDbNow()`。✅ 第二批已按需补上 `findAgentStatusBySlug()`（L364）/ `findAgentStatusById()`（L321）——它们服务 `/hosts/{slug}/now` 与 `/hosts/{id}`，⛔ 不做无人调用的死代码 |
+| `server/src/repositories/metric.repo.js` | ➕ `selectLatestSeriesForAgents(pool, input)`（§4.2；落地名，⛔ 不是初稿写的 `selectLatestSeriesByBase`） |
 | `server/src/repositories/probe.repo.js` | ➕ `countLatestProbeResults(pool, agentIds, since)`（§4.3） |
 | `server/src/app.js` | 挂载两个新路由 + 更新顶部「路由挂载清单」注释（把 `/api/public/*`、`/api/v1/hosts` 从 ⏳ 改为 ✅） |
 | `server/src/config/index.js` | ➕ `rateLimit.publicCacheTtlS`（`PUBLIC_CACHE_TTL_S`，默认 10，范围 0–60；0 = 关缓存）——仅当采纳 D4 |
@@ -456,6 +458,8 @@ SELECT p.agent_id,
 | WebSocket `/ws/public` `/ws/live` | M3 |
 | 任何索引 / 迁移 / 新表 / 新列 | ⛔ 本方案**零迁移**（§4.1） |
 | 前端页面接线（`PublicStatus.vue` / `HostList.vue` 从骨架变可用） | 后端契约冻结后的独立任务；本方案只改前端**类型声明**（§9.1） |
+
+> ✅ **上表的「不做」只描述第一批的范围**：其中 `/api/public/hosts/{slug}/now`、`/api/public/probes`、`/api/v1/hosts/{id}` 及四个子资源（含 `/metrics`）与 `/ws/public` · `/ws/live` **均已落地**（第二批 2026-10-04、收尾 2026-10-05，见 §12 与 `docs/api-status.md` §4.6.1 / §4.8 / §4.9）；仍未做的是「告警引擎 / 真实告警计数」。
 
 ---
 
@@ -507,16 +511,16 @@ SELECT p.agent_id,
 
 ---
 
-## 8. 验收方式（**由你执行**，我不在本机跑目标环境）
+## 8. 验收方式（**由你执行**）
 
 按现有习惯（`docs/api-status.md` §2），我交付**可直接复制的验证步骤**，真机执行由你完成。
 
 | # | 动作 | 期望 |
 |---|---|---|
-| 1 | `cd server && npm test` | 新增 3 个测试文件全绿；既有 225 用例不回归 |
+| 1 | `cd server && npm test` | 新增 3 个测试文件全绿；既有用例不回归（当前 `server/test/*.test.js` 共 **35 个文件、554 条用例**，其中 15 条为真机 `skip` 用例） |
 | 2 | `curl -s localhost:8787/api/public/hosts \| jq` | 200，`items[].slug` 存在、**无 `id`**、**无 IP 字段**、`snapshot` 无数据时为 `null` |
 | 3 | `curl -s localhost:8787/api/public/summary \| jq` | `total` = `online + offline + disabled` |
-| 4 | `PATCH /api/v1/settings {"public_view.enabled": false}` 后重放 #2（≤30s 生效） | **404** `not_found`（⛔ 不是 403、不是空 body） |
+| 4 | `PATCH /api/v1/settings {"public_view.enabled": false}` 后重放 #2（≤30s 生效）（⚠️ 该端点属 M3、尚未实现，见 `docs/api-status.md` §1；本条的开关切换需绕开它） | **404** `not_found`（⛔ 不是 403、不是空 body） |
 | 5 | 反复请求 `/api/public/hosts` 61 次 | 第 61 次 429 `rate_limited` + `Retry-After`；响应头有 `X-RateLimit-*` |
 | 6 | 未登录 `curl /api/v1/hosts` | 401 `session_expired` |
 | 7 | 登录后 `curl -b cookie /api/v1/hosts` | 200，含 `last_ip` / `clock_drift_ms` / `ip_flapping` / `active_alerts` |
@@ -535,7 +539,7 @@ SELECT p.agent_id,
 | 位置 | 现状 | 契约（`docs/api.md`） | 处置 |
 |---|---|---|---|
 | `web/src/api/public.ts` L26 | `getHosts(): Promise<PublicHost[]>` | `{ items: [...], next_cursor }` | ✅ 改为 `HostsResponse<PublicHost>`（`{ items, next_cursor, updated_at }`） |
-| `web/src/api/public.ts` L36 | `getProbes(): Promise<PublicProbe[]>` | `{ items: [...] }` | ✅ 改为 `ListResponse<PublicProbe>`（端点本身仍 ⏳） |
+| `web/src/api/public.ts` L36 | `getProbes(): Promise<PublicProbe[]>` | `{ items: [...] }` | ✅ 改为 `ListResponse<PublicProbe>`（该端点已在第二批落地，见 §12） |
 | `web/src/api/private.ts` L378 | `hostsApi.list(...): Promise<HostListItem[]>` | `{ items: [...] }` | ✅ 改为 `HostsResponse<HostListItem>` |
 | `web/src/types/domain.ts` L64 | `last_seen_ago?: number` | `last_seen_ago: string`（§2.3） | ✅ 改为 `string \| null`，并 ➕ `last_seen_at: string \| null` |
 | `web/src/types/domain.ts` L63 | `probes: { up, down }` | 一致 | 无需改 |
@@ -569,9 +573,11 @@ SELECT p.agent_id,
 | `GET /api/public/hosts` ✅ | **做** | 状态列表，本方案主体 |
 | `GET /api/public/summary` ✅ | **做** | 与上者共享同一推导（§3.2），分开做等于写两遍 |
 | `GET /api/public/hosts/{slug}/now` ⏳ | 不做 | 公开页「就地展开」用；它是 `/hosts` 的**字段超集**，等公开页接线时与 `frontend.md` §3 一起定稿更省返工（见待确认 D-范围） |
-| `GET /api/public/probes` ⏳ | 不做 | 探活概览表（设计稿 §3 区块）；依赖「探活可用率」口径（`docs/api-status.md` §5.2 未定） |
+| `GET /api/public/probes` ⏳ | 不做 | 探活概览表（设计稿 §3 区块）；初稿时依赖「探活可用率」口径（✅ 该口径已定，见 `docs/api-status.md` §5.2） |
 | `GET /api/v1/hosts` ✅ | **做** | 私有状态列表，本方案主体 |
 | `/api/v1/hosts/{id}` 及 4 个子资源 ⏳ | 不做 | 详情页（M4 交付物），历史/进程 Top 属另一批契约 |
+
+> ✅ **现状**：上表标 ⏳「不做」的三个单机端点与 `/api/v1/hosts/{id}` 的子资源**都已在第二批落地**（2026-10-04；`/metrics` 于 2026-10-05），见 §12 与 `docs/api-status.md` §4.6.1 / §4.8；本节保留的是**第一批的范围决策**。
 
 > 若你希望**一次性把 4 个公开端点都做完**，请明确告知（`/hosts/{slug}/now` 的「分区/网卡/GPU 数组 + 设备名泛化」口径需要先拍板，`docs/api.md` §3.2 标着 ❓）。**（待确认事项 D-范围）**
 
@@ -580,6 +586,8 @@ SELECT p.agent_id,
 ## 11. 待确认事项清单
 
 > ⛔ 按你的偏好，我不会一次性追问。**下面是完整索引**，我只会**逐条**问最关键的那几个（见文末「我建议先定这几条」）。
+>
+> ✅ **现状（2026-10-04 拍板）**：除 D1-a（已决议推迟到 M3）外，下表各项均已按「我的建议」拍板并落地（D-范围为第一批口径，其后的第二批已把余下端点一并做完，见 §10 的现状注）；逐条决议见 `docs/api-status.md` §4.6 / §4.6.1。
 
 | # | 事项 | 我的建议 |
 |---|---|---|
@@ -587,7 +595,7 @@ SELECT p.agent_id,
 | ~~D1-b~~ | ~~离线判定放读路径还是补 `offline_sweep`~~ | ✅ **已定并已实施**：两者都做（cron 写回 + 接口读取时推导），理由见 §2.1 与 `docs/api-status.md` §4.4 |
 | D2-a | 「最新值」的观测窗口 = **5 分钟**是否可接受？ | 接受（20 × 上报周期） |
 | D3-a | `last_seen_ago` 用字符串 + 附带分钟级 `last_seen_at`？ | 采纳，并把 `docs/api.md` §3.1 的 ❓ 标为已定 |
-| D4-a | 现在引入响应级缓存（+`PUBLIC_CACHE_TTL_S` env + `cache:public:*` 键）吗？ | 引入（5 台规模下也可省；但你若要"最小改动"可去掉，接口形状不变） |
+| D4-a | 现在引入响应级缓存（+`PUBLIC_CACHE_TTL_S` env + `snapshot:public:*` 键）吗？ | 引入（5 台规模下也可省；但你若要"最小改动"可去掉，接口形状不变） |
 | D8-a | `limit`/`cursor`：本期 `next_cursor` 恒 `null`、不实现真游标？ | 采纳；传 `cursor` **忽略**（而非 400） |
 | D-名 | 公开显示名缺失时回退 `name` 还是泛化名「主机 N」？ | **回退 `name`**（泛化名需要前端按序号生成，且 `name` 本身是运维自己起的别名，非主机名） |
 | D-禁 | 公开列表是否出现 `disabled` 主机？ | **不出现**（人工禁用是运营信息）；但 `summary.disabled` 保留计数，保证 `total = online + offline + disabled` |
@@ -697,6 +705,7 @@ G3 之后实际是**混合粒度**（cpu/mem/net/gpu 30s、disk/process 60s）�
 
 | 日期 | 变更 |
 |---|---|
+| 2026-10-05 | ✅ **收尾项也已落地**：`/api/v1/hosts/{id}/metrics`（时序查询；决议 G1–G10 见 `docs/api-status.md` §4.8）与两个 WebSocket 频道 `/ws/public` · `/ws/live`（决议 H1–H9 见该文件 §4.9）。至此 §5.3 / §10 中标 ⏳「不做」的端点全部落地（仅剩告警引擎属 M3） |
 | 2026-10-04 | ✅ **第二批也已落地**：`/api/v1/summary`（契约新增）、`/hosts/{id}`、`/hosts/{id}/probes`、`/ip-history`、`/processes`、`/api/public/hosts/{slug}/now`、`/api/public/probes`。逐条决议 E1–E10 与一条重要教训（**fast-json-stringify 对任意键对象默认序列化成 `{}`**）见 `docs/api-status.md` §4.6.1；§9.2 的**设备名泛化 ❓ 已闭环**（`磁盘 N`/`网卡 N`/`GPU N`，响应里一个指标名都不出现） |
 | 2026-10-04 | ✅ **本方案第一批已落地**（3 个端点：`/api/public/hosts`、`/api/public/summary`、`/api/v1/hosts`）。落地记录与逐条决议见 `docs/api-status.md` §4.6；`api.md` §3.2/§4.2 状态已改为 ✅。⚠️ 三处与初稿的差异：① §5.1 的 `findAgentStatusBySlug()` / `findAgentStatusById()` 在第一批**未实现**（它们只服务第二批的详情端点，⛔ 不做无人调用的死代码）——第二批已按需补上；② `middleware/publicView.js` 是**新增文件**（初稿误列在"修改文件"）；③ 新增一次 `SELECT now()`（仅当页内没有主机时）用于 `updated_at`，因此未命中缓存的公开请求在**极端空表**场景下是 4 条 SQL 而不是 §4.4 写的 3 条（正常有主机时仍是 3 条） |
 | 2026-10-04 | **校正离线判定基准（重要）**：Agent 的 `report.interval` 默认值是 **30s**（`agent/internal/config/config.go` 修订 G3 已由 15s 改为 30s），而实现与多处文档仍按 15s ⇒ 阈值算成 45s < 上报周期，会**假离线**。已改：`AGENT_REPORT_PERIOD_S` 30s、阈值 **90s**、扫描周期默认 **60s**（`HEARTBEAT_SWEEP_INTERVAL_S`，原 30s）；同步校正 `docs/agent.md` G3、`docs/database.md` §8.2、`docs/api.md` §3.2、设计 §4 引用；新增两条回归防线（扫描周期 < 阈值、按 30s 节奏上报的任何相位都不得判离线）。另新增 §11.1「离线参数放数据库」讨论 |

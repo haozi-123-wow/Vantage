@@ -4,10 +4,10 @@ npm-debug.log*
 pnpm-debug.log*
 yarn-error.log*
 
-# 沙箱内 npm 需要把 cache 放工作区里（见 README「本机开发」），别提交
+# npm 缓存目录（放在仓库内时忽略），别提交
 .npm-cache/
 
-# 同理：Go 的 GOPATH / GOCACHE / 模块缓存默认在工作区外，沙箱会拒写，故改成放工作区内
+# Go 的 GOPATH / GOCACHE / 模块缓存改用工作区内目录时的落点
 .gocache/
 .gopath/
 .gomodcache/
@@ -29,6 +29,11 @@ tmp/
 .cache/
 _dump/
 *.pid
+
+# --- 工具产物 ---------------------------------------------------------------
+# DSH（编码 Agent）的编辑审查日志与临时目录：体积大且只对本机会话有意义
+.dsh-edit-review*.json
+.dsh-*.tmpdir/
 
 # --- 发布私钥（兜底）--------------------------------------------------------
 # build-release.sh --keygen 默认写在 dist/（已忽略）；这里再兜一层，

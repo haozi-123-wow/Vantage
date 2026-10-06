@@ -2,8 +2,8 @@
 /*
  * agent/deploy/tests/shell-lint.js — 部署脚本的本机结构化校验
  *
- * 为什么需要它：Windows 开发机上 MSYS 的 `sh.exe` 会被沙箱的命名管道限制挡住
- * （`couldn't create signal pipe, Win32 error 5`），跑不了 `sh -n`。
+ * 为什么需要它：Windows 开发机上没有可用的 POSIX `sh`（MSYS 的 `sh.exe` 在该平台不可靠），
+ * 因此没法在开发机上直接跑 `sh -n`。
  * 本工具用 Node 做**等价的结构检查 + 红线检查**，让本机也能提前发现低级错误。
  *
  * ⚠️ 它**不能替代** `sh -n` 与真机验证：真正的语法/运行验证仍以

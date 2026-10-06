@@ -6,7 +6,9 @@
 >
 > **核验基准**：工作区 `D:\phpstudy_pro\WWW\Vantage`。
 > 首次核验 2026-09-28（`HEAD = 9a091da`，Agent 代码仅在暂存区）；
-> **最近核验 2026-10-01（`HEAD = ab83d7f`）**：P0/P1 完成，`go vet ./...` 与 `go test ./... -count=1`
+> **最近核验 2026-10-05（`HEAD = ffd1ced`）**：collector 单元测试已落地（`418b454`），
+> `go vet ./...` 与 `go test ./... -count=1` 保持全绿；见 §5.0.2。
+> 上一轮核验 2026-10-01（`HEAD = ab83d7f`）：P0/P1 完成，`go vet ./...` 与 `go test ./... -count=1`
 > **首次全绿**，Agent 实现已进版本历史（`8737820`），测试修复与清理见 `1c6dd9a`，
 > 改动全记录见 [`docs/agent-changes-2026-10-01.md`](agent-changes-2026-10-01.md)。
 >
@@ -23,15 +25,15 @@
 
 | # | 结论 | 证据 |
 |---|---|---|
-| 1 | **Agent 主体已实现**：采集 / 探活 / 组包签名 / 上报重试 / 配置校验 / SIGHUP 热重载全部落地 | 非测试代码 **~6700 行 / 29 个文件**，测试 **3306 行 / 9 个文件**（`agent/**` 共 38 个 `.go`，不含已删草稿） |
+| 1 | **Agent 主体已实现**：采集 / 探活 / 组包签名 / 上报重试 / 配置校验 / SIGHUP 热重载全部落地 | 非测试代码 **6775 行 / 32 个文件**，测试 **4456 行 / 16 个文件**（`agent/**` 共 48 个 `.go`，不含已删草稿） |
 | 2 | `go build ./...` 与 Linux 静态交叉编译**通过**，产出 7.3MB 单文件静态二进制（符合 `docs/agent.md` §10） | 见 §5 实测记录（2026-09-28、2026-10-01 两次） |
-| 3 | ✅ **测试已全绿（2026-10-01）**：R-01 引号笔误修复后 prober 测试首次真正运行，暴露的 9 个失败用例已逐一定性处理（2 个代码缺陷修复、1 个测试向量纠正、2 个环境用例明确 skip） | `go vet ./...` / `go test ./... -count=1` exit 0；见 §5.1 与变更说明 §2 |
+| 3 | ✅ **测试已全绿（2026-10-01）**：R-01 引号笔误修复后 prober 测试首次真正运行，暴露的 9 个失败用例已逐一定性处理（2 个代码缺陷修复、1 个测试向量纠正、2 个环境用例明确 skip）。⚠️ 2026-10-05 复测发现 prober 有一条 HTTPS 证书用例在**并行整包**运行时偶发超时失败（`-p 1` 串行与单独运行均通过），见 §5.0.2 | `go vet ./...` / `go test ./... -count=1` exit 0；见 §5.1 与变更说明 §2 |
 | 4 | ✅ **文档口径已对齐（2026-10-01，`ab83d7f`）**：README 组件表/§3.2/§7 与 `docs/agent.md` §2 模块表（retry 内联、补 4 包）均已纠正；D-01/D-03 关闭 | 见 §6 与变更说明 §3 |
 | 5 | **M5 / M6 真未开工**：Docker 采集（配置层显式拒绝）、Windows/macOS（启动即拒绝） | 见 §4、§7 |
 | 6 | 🟡 **M2 部署侧已落地代码（2026-10-05），待真机验证**：`agent/deploy/` 现有 `vantage.sh`（POSIX sh）、`vantage-agent.service`、`config.minimal.yaml`、`build-release.sh`、`publish-release.sh`、`tests/{static-assert.sh,shell-lint.js}`、`README.md` —— 设计见 `docs/agent-install-script.md`；仍缺 `docs/agent-install-ops.md`（A-T13，`setcap`/出站白名单） | 见 §7；真机 11 条负例待 Owner 执行（设计 §12.2） |
 | 7 | ✅ **Agent 实现已提交（`8737820`，2026-09-30，98 文件 / +17858 行）**；其顺序偏差（红测试与草稿入库）已由 `1c6dd9a` 补救 | `git log`；§5.3 |
 
-**一句话（2026-10-05）**：**测试绿了、文档对齐了、部署侧脚本也写完了（🟡 待真机验证）；剩下的就是「补测试覆盖（A-T06/07/08）、部署侧真机验证与发布（A-T10～T13 的验收项）、步 0 的三源发布」。**
+**一句话（2026-10-05）**：**测试绿了、文档对齐了、部署侧脚本也写完了（🟡 待真机验证）；剩下的就是「补剩余测试覆盖（A-T07/08，A-T06 collector 已落地）、部署侧真机验证与发布（A-T10～T13 的验收项）、步 0 的三源发布」。**
 
 ---
 
@@ -43,7 +45,7 @@
 |---|---|---|---|---|
 | `cmd/agent` | 1 | ❌ | 启动、信号、优雅退出、`--check` / `--once` / `--print-body` | §2、§7 |
 | `internal/auth` | 3 | ✅ 1 | 凭证文件加载（`vk_`/`vs_` 前缀、0600、两文件不得同路径）+ HMAC 签名 | §6 |
-| `internal/collector` | 12 | ❌（有 21 个 `testdata` 夹具） | `cpu` `mem` `disk` `net` `gpu` `process` + `/proc` 解析 + 速率计算 | §3 |
+| `internal/collector` | 19 | ✅ 7（有 21 个 `testdata` 夹具） | `cpu` `mem` `disk` `net` `gpu` `process` + `/proc` 解析 + 速率计算 | §3 |
 | `internal/config` | 2 | ✅ 1 | `config.yaml` 读取与严格校验（未知键拒绝） | §8 |
 | `internal/logging` | 1 | ❌ | slog，`text`/`json`，文件轮转 | §8 |
 | `internal/metric` | 2 | ✅ 1 | 指标全名拼接与维度转义（消费 `contracts/metric-names.json`） | §3 |
@@ -57,10 +59,10 @@
 | ~~`internal/buffer`~~ | 0 | — | ✅ 按决策 G1 已删除（无磁盘缓存、不补传） | §2 |
 | ~~`agent/tmp_cksum_check`~~ | 0 | — | ✅ 临时草稿已删（2026-10-01，`1c6dd9a`）；`.gitignore` 已兜底 `agent/tmp_*/`（A-T23） | — |
 
-**统计（2026-10-01，不含已删草稿）**：38 个 `.go` 文件（9 个测试文件）；非测试 **~6700** 行，测试 **3306** 行；`collector/testdata` 夹具 **21** 个文件。
+**统计（2026-10-05，不含已删草稿）**：48 个 `.go` 文件（16 个测试文件）；非测试 **6775** 行 / 32 个文件，测试 **4456** 行；`collector/testdata` 夹具 **21** 个文件。
 
-**有测试的包**：`auth` `config` `metric` `model` `prober` ✅ `reporter`
-**无测试的包**：`cmd/agent` `collector` `logging` `scheduler` `ulid` `version`（对应待办 A-T06/A-T07/A-T08）
+**有测试的包**：`auth` `collector` `config` `metric` `model` `prober` ✅ `reporter`
+**无测试的包**：`cmd/agent` `logging` `scheduler` `ulid` `version`（对应待办 A-T07/A-T08；A-T06 `collector` 已落地）
 
 ---
 
@@ -98,7 +100,7 @@
 | §10 资源预算 | `GOMEMLIMIT` 封顶、固定 goroutine、磁盘 ≈ 0 | `main.go:99` `debug.SetMemoryLimit`；`scheduler` 每采集器 1 条 + 上报 1 条；无磁盘写入 | ✅ |
 | §10 自监控三项 | `agent.mem_rss` / `agent.report_failures` / `agent.reload_ok` | `scheduler.go:456/462`、`model/report.go:180-185` | ✅ |
 | §12.1 `vantage.sh` | install / upgrade / uninstall(`--purge`) / start / stop / restart / status / reload | `agent/deploy/vantage.sh`（POSIX sh，子命令齐；含源链回退、验签+sha256、凭证三形式） | 🟡 代码已落地，**真机验证待做** |
-| §12 systemd 加固 | `User=vantage`、`ProtectSystem=strict`、`ReloadSignal=SIGHUP` 等 | **仓库内无任何 `.service` 文件** | ❌ |
+| §12 systemd 加固 | `User=vantage`、`ProtectSystem=strict`、`ReloadSignal=SIGHUP` 等 | `agent/deploy/vantage-agent.service`（含 `NoNewPrivileges`/`ProtectSystem=strict`/`ProtectHome`/`PrivateTmp`/`SystemCallFilter`/`ReadWritePaths`/`ReloadSignal=SIGHUP`；与 `vantage.sh` 内嵌模板逐字一致） | 🟡 模板已落地，**真机验证待做**（A-T11） |
 | §13.3 平台路线 | M1–M5 只做 Linux；非 Linux 拒绝启动 | `collector/platform_other.go:23` `Supported=false`，`main.go:78-82` 拒绝启动并说明排期 | ✅ 设计如此 |
 | §14 M5 Docker 采集 | 预留转正 | `config.go:543` 开启 `collect.docker.enabled` 直接报错「排在 M5」 | ❌ 未开工 |
 | §14 M6 Win/macOS | 采集器 + 安装脚本 + reload 机制 | 无 `_windows.go` / `_darwin.go` 实现 | ❌ 未开工 |
@@ -111,21 +113,21 @@
 |---|---|---|---|
 | **M1** | `cpu/mem/disk/net/gpu/process` 采集 + 组包上报 + 出站通路 | **✅ 代码完成** | 六类采集器齐备；`--once` 提供单次联调；构建通过 |
 | **M2** | key+HMAC、TLS、限流/幂等配合、单向性复核 + **安装脚本** | **🟡 代码齐（含脚本）/ 待真机验证** | 签名·TLS·mTLS·nonce/batch 语义齐；`vantage.sh`、systemd unit、config 模板、打包与发布脚本已落地（`agent/deploy/`）；仍缺 `setcap` 运维文档（A-T13） |
-| **M3** | 探活三种完整 + 告警相关字段（漂移、离线心跳） | **🟡 代码齐 / 测试红** | ping/http/tcp 与心跳节流已实现；prober 测试因语法错误未运行，等于**未验证** |
-| **M4** | GPU/进程完善、非 root 打磨、SIGHUP 热重载、`setcap` 文档 | **🟡 部分** | 热重载 ✅、GPU 降级 ✅、Top-N ✅；`collect.process.watch` 不产出指标、非 root/systemd/`setcap` 未落地 |
+| **M3** | 探活三种完整 + 告警相关字段（漂移、离线心跳） | **✅ 代码完成 / 测试已运行** | ping/http/tcp 与心跳节流已实现；prober 测试已真正运行并全绿（`1c6dd9a` 修复引号笔误后）。⚠️ 其中 HTTPS 证书校验用例在并行整包运行时偶发超时失败，见 §5.0.2 |
+| **M4** | GPU/进程完善、非 root 打磨、SIGHUP 热重载、`setcap` 文档 | **🟡 部分** | 热重载 ✅、GPU 降级 ✅、Top-N ✅；`collect.process.watch` 不产出指标、非 root/`setcap` 文档未落地（systemd 模板已落地、真机验证待做，见 A-T11） |
 | **M5** | Docker 采集（预留转正）、systemd 加固打磨 | **❌ 未开工** | 配置层显式拒绝；无部署单元 |
 | **M6** | Windows / macOS 采集器 + 安装脚本与 reload 机制 | **❌ 未开工** | 非 Linux 启动即拒绝（符合路线，非缺陷） |
 
 ---
 
-## 5. 实测验证记录（2026-09-28 首测；2026-10-01 复测）
+## 5. 实测验证记录（2026-09-28 首测；2026-10-01、2026-10-05 复测）
 
 ### 5.0 复测记录（2026-10-01，`HEAD = ab83d7f`）
 
 | 命令 | 结果 |
 |---|---|
 | `go vet ./...` | ✅ exit 0（首测 exit 1，R-01 已修） |
-| `go test ./... -count=1` | ✅ **全绿 exit 0**：`auth` 0.33s / `config` 0.34s / `metric` 0.34s / `model` 0.27s / `prober` 2.83s / `reporter` 0.72s；其余 6 包无测试文件 |
+| `go test ./... -count=1` | ✅ **全绿 exit 0**：`auth` 0.33s / `config` 0.34s / `metric` 0.34s / `model` 0.27s / `prober` 2.83s / `reporter` 0.72s；当时其余 6 包无测试文件（2026-10-05 起 collector 已有测试，见 §5.0.2） |
 | `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath ./cmd/agent` | ✅ 通过 |
 
 prober 测试首次真正运行后暴露 9 个失败用例，定性为 2 个代码缺陷（`splitHostPort` 歧义判定、
@@ -152,6 +154,23 @@ Windows 跑测试的预期 skip 与 WARN 对照表见 [`docs/agent-testing.md`](
 从未入库（npm ci 在克隆机上失败），登记 A-T27。
 
 真机操作方法见 [`docs/agent-testing.md`](agent-testing.md) §7。
+
+### 5.0.2 复测记录（2026-10-05，`HEAD = ffd1ced`）
+
+| 命令 | 结果 |
+|---|---|
+| `go vet ./...` | ✅ exit 0 |
+| `go test ./... -count=1` | ⚠️ exit 1：`internal/{auth,collector,config,metric,model,reporter}` 全 ok（`collector` 16.8s / 35 条用例全过），仅 `internal/prober` 的一条用例失败 |
+| `go test -p 1 ./... -count=1`（包串行） | ✅ **exit 0 全绿**：`auth` 0.27s / `collector` 4.98s / `config` 0.32s / `metric` 0.10s / `model` 0.09s / `prober` 2.85s / `reporter` 0.81s |
+| `go test -count=3 -run TestHTTPProbeHTTPSUsesRealCertVerification ./internal/prober/` | ✅ 通过（单独运行/`-count=3` 均绿） |
+
+**新发现（未被任何文档记录的偶发失败）**：`internal/prober` 的
+`TestHTTPProbeHTTPSUsesRealCertVerification`（`http_test.go:491-515`，断言自签证书必须校验失败并报出
+证书类错误）在**并行整包**运行时会偶发超时失败 —— 实测报错为
+`抓取 https://127.0.0.1:8295 失败：超时（context deadline exceeded）`，即 TLS 握手未在探活超时内
+完成，走了超时分支而非证书错误分支。`-p 1` 串行整包运行与单独 `-run` 均稳定通过，
+`collector` 测试新增后整包并行负载上升，**在旧基线上不一定复现**。属**测试稳定性问题，非实现缺陷**
+（本探活确实不跳过证书校验，串行运行时断言成立）。已登记待办 A-T28。
 
 以下 §5.1–§5.3 为 2026-09-28（`HEAD = 9a091da`，Agent 代码仅在暂存区）的**首测记录**，保留作对照 ——
 其中「go vet / go test 失败」的结论已被 §5.0 的复测取代。
@@ -189,6 +208,9 @@ ok     vantage-agent/internal/reporter 0.597s
 ?      vantage-agent/internal/version   [no test files]
 ```
 
+> ℹ️ 以上为 **2026-09-28 首测**的原始输出，保留作对照；其中 `internal/collector [no test files]`
+> 已于 2026-10-05 失效（collector 现有 7 个 `_test.go`，见 §5.0.2 与 §2 代码清点）。
+
 > ⚠️ 真机端到端 `internal/reporter/e2e_test.go` 需 `VANTAGE_E2E_CENTER` / `VANTAGE_E2E_AGENT_ID` /
 > `VANTAGE_E2E_KEY` / `VANTAGE_E2E_SECRET` 才会执行，**本次未跑**（且在 Windows 开发机上
 > `Supported=false`，`--once` 也会被拦住 —— 真机联调必须在 Linux 上做）。
@@ -208,12 +230,14 @@ npm test
 
 ### 5.3 仓库状态
 
-| 项 | 值 |
+> ⚠️ 下表是 **2026-09-28 首次核验时的快照**（当时 Agent 代码还只在暂存区）；**现状（2026-10-05，HEAD = `ffd1ced`）**：`git rev-list --count HEAD` = **16**、`git ls-files` = **298** 个文件，Agent 的全部实现与测试均已入库。
+
+| 项 | 值（2026-09-28 快照） |
 |---|---|
 | `git rev-list --count HEAD` | **1**（仅 `9a091da feat: 新增 vantage-core 核心服务完整实现及基础设施`） |
 | 暂存区规模 | **95 文件 / +19002 行**（Agent 全部实现 + `contracts/` + server 测试） |
 | 未暂存改动 | 无（`git diff --stat` 为空） |
-| 结论 | **Agent 代码尚未进版本历史**，只存在于暂存区 |
+| 结论 | 当时 **Agent 代码尚未进版本历史**，只存在于暂存区 —— ✅ 已解决：`1c6dd9a`/`ab83d7f`（A-T03/A-T04）及后续提交共 16 个已在 `main` 上 |
 
 ---
 
@@ -222,12 +246,12 @@ npm test
 | # | 偏差 | 细节 | 处置 |
 |---|---|---|---|
 | D-01 | README 组件表与状态表 | README §1 表把 `vantage-agent` 写成**「未开工」**，§顶部又写「🚧 进行中」；§3.2 写「Go Agent 尚未开工，用脚本手工联调」；§7 里程碑 M2–M6 整列 ⏳ | ✅ 已解决（2026-10-01，A-T04，`ab83d7f`） |
-| D-02 | README §7 里程碑 | M1 行只承认「中心侧 ✅（Agent 待做）」，与本文 §4 不符 | 待办 A-T04 |
+| D-02 | README §7 里程碑 | M1 行只承认「中心侧 ✅（Agent 待做）」，与本文 §4 不符 | ✅ 已解决（2026-10-01，A-T04，`ab83d7f`）；2026-10-05 又按 M1–M4 实际进度重写了该里程碑表的 M2/M3/M4 行 |
 | D-03 | `docs/agent.md` §2 模块表 | 列了 `internal/retry/`，实际无此包（重试内联于 `reporter`）；同时代码新增了文档未列的 `internal/{logging,metric,model,ulid}` | ✅ 已解决（2026-10-01，A-T05，`ab83d7f`）；新发现的 §3 数据源列 gopsutil 口径登记为 A-T25 |
 | D-04 | `docs/agent.md` §3 能力声明 | 文档说「首次上报与能力变化时必填」；`gpu.go` 的"连续失败后回落 `gpu.nvidia=false`"会触发**能力变化重报**，是文档未描述的额外上报量来源（代码已在注释中记录） | 观察项，暂不改 |
 | D-05 | `docs/agent.md` §3 `collect.process.watch` | 配置项存在且校验，但**上报格式无承载字段**，`process.go:99-105` 自注为「本期只记录、不产出指标」，启动时打一次 WARN | 待办 A-T14（属契约变更，需先改文档） |
 | D-06 | 中心侧 M-05 / M-06 | `host.boot_time` 口径（秒/毫秒/RFC3339）与 `disk[].device` 是否必填，中心 `server/README.md` 明确「等 Agent 定型后收窄为一」 | 待办 A-T15 / A-T16 |
-| D-07 | `internal/collector` 测试 | `testdata/proc/**`（21 个夹具）已备好，但**没有任何 `_test.go`**，夹具白建 | 待办 A-T06 |
+| D-07 | `internal/collector` 测试 | `testdata/proc/**`（21 个夹具）已备好，✅ 已有 7 个 `_test.go`（35 条用例）消费全部夹具 | ✅ 已解决（A-T06，`418b454`） |
 
 ---
 
@@ -253,11 +277,12 @@ npm test
 | # | 级别 | 问题 | 影响 | 处置 |
 |---|---|---|---|---|
 | **R-01** | 🔴→✅ | ~~`agent/internal/prober/ping_test.go:57` 引号笔误~~ **已解决（2026-10-01，`1c6dd9a`）**：修复后 prober 测试首次运行，暴露的 9 个失败用例已处理，`go vet` / `go test ./...` 恢复通过 | ~~挡 CI~~ 不再阻塞 | 变更说明 §2 |
-| R-02 | 🟡 | `collector` / `scheduler` 两个**最复杂**的包零测试覆盖（`collector` 有 21 个夹具却无测试） | `/proc` 解析、速率差值、调度/心跳/reload 语义无回归保护 | 待办 A-T06 / A-T07 |
+| R-02 | 🟡→🟢 | ~~`collector` / `scheduler` 两个**最复杂**的包零测试覆盖（`collector` 有 21 个夹具却无测试）~~ **collector 侧已解决（`418b454`，A-T06）**：7 个 `_test.go` / 35 条用例覆盖 `/proc` 解析、注入时钟的速率差值、降级与过滤规则；**`scheduler` 仍零测试** | 调度/心跳/reload 语义无回归保护 | 待办 ~~A-T06~~ / A-T07 |
 | R-03 | 🟡→✅ | ~~Agent 实现未提交，仅在工作区暂存区~~ **已解决（2026-09-30，`8737820`）**；其"红测试与草稿一并入库"的顺序偏差由 `1c6dd9a` 补救 | ~~不可追溯~~ 已进版本历史 | 待办 A-T03 完成记录 |
 | R-04 | 🟡→✅ | ~~真机 E2E 从未留痕~~ **已解决（2026-10-01，§5.0.1）**：Debian 12 真机 3/3 E2E PASS + `--once` 真实上报落库，顺带抓出并修复 A-T26 | — | 已完成 |
 | R-05 | 🟢→✅ | ~~`agent/tmp_cksum_check/main.go` 草稿已进暂存区~~ **已解决（2026-10-01，`1c6dd9a`）**：草稿已删，`.gitignore` 兜底 `agent/tmp_*/` | — | 待办 A-T02/A-T23 |
-| R-06 | 🟢 | 文档口径漂移（D-01…D-03） | 后续接手者会以为 Agent 未开工、或去找不存在的 `internal/retry` | D-01/D-03 已解决（A-T04/A-T05）；D-04～D-07 仍在 |
+| R-06 | 🟢 | 文档口径漂移（D-01…D-03） | 后续接手者会以为 Agent 未开工、或去找不存在的 `internal/retry` | D-01/D-03 已解决（A-T04/A-T05）；D-07 已解决（A-T06）；D-04～D-06 仍在 |
+| **R-07** | 🟢 | `internal/prober` 的 `TestHTTPProbeHTTPSUsesRealCertVerification` 在**并行整包**运行时偶发超时失败（报 `context deadline exceeded` 而非证书错误），`-p 1` 串行与单独 `-run` 稳定通过 | 并行跑 `go test ./...` 时会看到假红，可能被误判为实现缺陷 | 待办 A-T28（测试稳定性） |
 
 ---
 
@@ -268,6 +293,7 @@ npm test
 | 2026-09-28 | 首次建立本状态文档：清点 Agent 代码（39 `.go` / 非测试 6736 行 / 测试 3306 行），实跑构建、交叉编译、`go vet`、`go test` 与 `server/ npm test`，登记 R-01…R-06 与 D-01…D-07 |
 | 2026-10-01 | 复测更新：R-01/R-03/R-05 与 D-01/D-03 关闭（提交 `8737820`、`1c6dd9a`、`ab83d7f`）；`go vet` / `go test ./...` **首次全绿**（prober 首次真正运行，9 个暴露用例定性处理：splitHostPort 歧义判定与 Windows errno 分类两个代码缺陷修复、1 个测试向量纠正、2 个环境用例明确 skip）；新增测试手册 `docs/agent-testing.md` 与改动记录 `docs/agent-changes-2026-10-01.md`。新登记 A-T25（`docs/agent.md` §3 数据源列 gopsutil 口径收窄） |
 | 2026-10-01(晚) | **A-T09 真机 E2E 完成**（§5.0.1）：Debian 12 真机 3/3 E2E PASS、`--once` 真实上报落库（PG 18.4 实测兼容）、红线检查通过；真机首跑抓出 `--once` 缺 cpu 预热轮的缺陷并修复（A-T26，`90e81e8`）；登记 A-T27（`server/package-lock.json` 未入库，克隆机 `npm ci` 失败）。R-04 关闭 |
+| 2026-10-05 | **A-T06 collector 单元测试落地**（`418b454`）：新增 7 个 `_test.go` / 35 条用例（全部消费 `testdata/proc/**` 夹具，速率类注入时钟、含降级与过滤规则），顺带修复测试暴露的 disk 延迟与进程契约缺陷；本文件 §2 代码清点（48 `.go` / 16 测试文件 / 非测试 6775 行 / 测试 4456 行）、§3 systemd 行（原写「仓库内无任何 `.service` 文件」、现更正为 `agent/deploy/vantage-agent.service` 已落地）、§4 M3/M4 行、§5.0.2、§6 D-07、§8 R-02 同步；复测发现 prober HTTPS 证书用例在并行整包下偶发超时（登记 A-T28） |
 
 ---
 

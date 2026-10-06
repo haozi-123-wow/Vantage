@@ -12,7 +12,7 @@
  *   aggregate_5m           每 300s              原始层 → metrics_5m
  *   purge_downsampled      每日                 1m > 90d、5m > 1y 分批 DELETE
  *   purge_non_timeseries   每日                 探活/进程/IP 区间/通知/审计/静默 分批 DELETE
- *   offline_sweep          每 30s              超时未上报 → agents.status = 'offline'（⛔ 防抖：只 online→offline）
+ *   offline_sweep          每 60s              超时未上报 → agents.status = 'offline'（⛔ 防抖：只 online→offline）
  *
  * ⚠️ `offline_sweep` **不是可选的优化项**：上报路径是请求驱动的，机器断电时没有任何请求进来，
  *    `agents.status` 会永远停在 `online`（= 死了三天的机器在面板上仍是绿的）。
@@ -216,8 +216,8 @@ export function createCronService({ db, redis, config, logger }) {
       /**
        * 离线判定（「点名」）：把超时未上报的主机置为 `offline`。
        *
-       * 频率取自 `config.heartbeat.sweepIntervalS`（默认 30s，docs/database.md §8.2 的
-       * 「建议每 15–30s」）—— 这个配置项本来就是为它存在的，⛔ 不要另加一个 env。
+       * 频率取自 `config.heartbeat.sweepIntervalS`（默认 60s，docs/database.md §8.2 的口径）
+       * —— 这个配置项本来就是为它存在的，⛔ 不要另加一个 env。
        *
        * 为什么要**广播**：`services/ingest.service.js` 的 `publishDeltas()` 里那条
        * 「`offline/从未上报 → online` 才广播」的逻辑，其存在的唯一意义就是给浏览器补发

@@ -9,10 +9,11 @@
 > **基线**：2026-09-28，`HEAD = 9a091da`。当时 `go build ./...` 通过，`go vet ./...` 与
 > `go test ./...` 因 A-T01 失败。
 > **进展**：2026-10-01 P0/P1 完成（`1c6dd9a` + `ab83d7f`）—— `go vet` / `go test ./...` **首次全绿**，
-> A-T01/A-T02/A-T03/A-T04/A-T05/A-T23/A-T24 已 ✅，新增 A-T25；详见文末变更记录与
-> [`docs/agent-changes-2026-10-01.md`](agent-changes-2026-10-01.md)。
+> A-T01/A-T02/A-T03/A-T04/A-T05/A-T23/A-T24 已 ✅；2026-10-01(晚) A-T09/A-T26 已 ✅；
+> 2026-10-05 A-T06 已 ✅（`418b454`）、A-T27 ① 已 ✅（`6b469ad`）；新增 A-T25 / A-T28。
+> 详见文末变更记录与 [`docs/agent-changes-2026-10-01.md`](agent-changes-2026-10-01.md)。
 >
-> **维护约定**：新增待办从 `A-T25` 起编号，不要复用已完成的编号。优先级含义见下表。
+> **维护约定**：新增待办从 `A-T28` 之后编号，不要复用已完成的编号。优先级含义见下表。
 
 ## 优先级与状态图例
 
@@ -115,7 +116,7 @@ UDP+IPAddr 仅 Linux 可测、DNS 劫持环境自检 skip），**未放宽任何
 
 ## 3. P2 —— 验证缺口
 
-### A-T06　补 `internal/collector` 单元测试 ⬜
+### A-T06　补 `internal/collector` 单元测试 ✅（`418b454`）
 
 | 项 | 内容 |
 |---|---|
@@ -123,6 +124,12 @@ UDP+IPAddr 仅 Linux 可测、DNS 劫持环境自检 skip），**未放宽任何
 | 依据 | `platform_other.go:9-11` 的设计意图就是「任意开发机都能把 `ProcRoot` 指向夹具跑真实解析」；`docs/agent.md` §3 |
 | 涉及文件 | 新增 `agent/internal/collector/*_test.go` |
 | 验收 | ① 六类采集器的 `/proc` 解析都有用例，且**跑在夹具目录上**（`t.Parallel()` 可选）；② 速率类指标（`disk.read_bps`、`net.rx_bps`）用两次采样 + 注入时钟验证「差值 ÷ 真实经过时间」，并覆盖**周期被 reload 改掉**的场景（`rate.go:8` 明确要求不得拿配置周期当分母）；③ 优雅降级路径有用例：缺 `nvidia-smi`、`/proc` 文件缺失、无 inode；④ 过滤规则 `filters.disk.exclude_fs` / `include_mounts` / `net.exclude_devices`（含 `docker*` 匹配裸 `docker`）有用例；⑤ `go test ./internal/collector/ -count=1` 全绿 |
+
+**完成记录（`418b454`）**：新增 7 个 `_test.go` / **35 条用例**（`collector` `cpu` `mem` `disk` `net` `gpu` `process`），
+全部消费 `testdata/proc/**` 夹具、速率类注入假时钟（`newFakeClock`），覆盖降级路径、过滤规则与
+`docker*` 匹配裸 `docker`；顺带修复测试暴露的 disk 延迟与进程契约缺陷。
+验收 ①②③④⑤ 达成：2026-10-05 复测 `ok vantage-agent/internal/collector`（35/35 PASS）。
+遗留：`internal/scheduler` 仍零测试，见 A-T07。
 
 ### A-T07　补 `internal/scheduler` 单元测试 ⬜
 
@@ -176,7 +183,7 @@ E2E 3/3 PASS（WrongSecret / RealCenter / IdempotentReplay）；`--once` 上报 
 | 依据 | `docs/agent.md` §12.1（子命令表）、§12.2（安装参数三种形式）；设计见 **`docs/agent-install-script.md`**（已定稿） |
 | 验收 | ① 子命令齐：`install` / `upgrade` / `uninstall`（默认保留配置+key+日志并打印保留路径，`--purge` 才彻底删且需交互确认）/ `start` / `stop` / `restart` / `status` / `reload`（= `systemctl reload vantage-agent`）；② `install` 下载二进制后**校验 sha256**（能签名更好）→ 创建低权用户 → 写入受限配置目录 → 安装 unit → 启动；③ `upgrade` 替换二进制但**保留配置**；④ `status` 输出「运行中/版本/最后上报时间/最近错误码/生效配置摘要」 |
 | 红线 | ⛔ 任何子命令都不得接受 `--key <明文>`；⛔ 脚本落地 key 文件后立即 `unset VANTAGE_KEY` 并清理临时缓冲；⛔ 日志与 `--help` 不得出现 key/secret |
-| 状态（2026-10-05） | 🟡 **代码已落地**：`agent/deploy/{vantage.sh,vantage-agent.service,config.minimal.yaml,README.md}` + `build-release.sh`/`publish-release.sh`；本机校验（`tests/shell-lint.js`，带自测）全绿。⛔ **真机/容器验证未做** —— 按设计 §12.2 的 11 条负例由 Owner 执行；步 0（生成发布密钥对、打 tag、发三源）也须 Owner 自己终端执行 |
+| 状态（2026-10-05） | 🟡 **代码已落地**：`agent/deploy/{vantage.sh,vantage-agent.service,config.minimal.yaml,README.md}` + `build-release.sh`/`publish-release.sh`；本机等价校验（`tests/shell-lint.js`，带自测）全绿。⛔ **真机/容器验证未做** —— 按设计 §12.2 的 11 条负例由 Owner 执行；步 0（生成发布密钥对、打 tag、发三源）也由 Owner 执行 |
 
 ### A-T11　实现 systemd unit + 非 root 加固 🟡（模板已落地，待真机打磨）
 
@@ -278,11 +285,10 @@ E2E 3/3 PASS（WrongSecret / RealCenter / IdempotentReplay）；`--once` 上报 
 
 | 项 | 内容 |
 |---|---|
-| 问题 | `agent/tmp_cksum_check/` 这类草稿目录能被 `git add` 进来；本机还存在 `.gocache` / `.gomodcache` / `.gopath` / `.npm-cache` 等工作区缓存 |
-| 验收 | ① 确认上述缓存目录均在 `.gitignore` 内（当前 `.gocache` 等已在）；② 约定草稿目录命名（如 `agent/tmp_*/`）并忽略；③ ⛔ 不要用宽泛的 `tmp*` 误伤正式代码 |
+| 问题 | `agent/tmp_cksum_check/` 这类草稿目录能被 `git add` 进来 |
+| 验收 | ① 确认临时产物目录均在 `.gitignore` 内；② 约定草稿目录命名（如 `agent/tmp_*/`）并忽略；③ ⛔ 不要用宽泛的 `tmp*` 误伤正式代码 |
 
-**完成记录（2026-10-01，`1c6dd9a`）**：新增 `agent/tmp_*/` 规则（未用宽泛 `tmp*`）；`.gocache` /
-`.gopath` / `.gomodcache` / `.npm-cache` 此前已在。
+**完成记录（2026-10-01，`1c6dd9a`）**：新增 `agent/tmp_*/` 规则（未用宽泛 `tmp*`）。
 
 ### A-T24　打通文档索引 ✅（2026-10-01，`ab83d7f`）
 
@@ -311,16 +317,32 @@ E2E 3/3 PASS（WrongSecret / RealCenter / IdempotentReplay）；`--once` 上报 
 | 问题 | A-T09 真机首跑发现：`cpu.usage` 是差分指标需要两个采样点，`runOnce` 只跑一轮 → `metrics.cpu` 永远缺失 → 本地校验（中心 schema 底线）必拒。Windows 开发机不可达（`Supported=false` 提前拒绝），`cmd/agent` 无测试 |
 | 修复 | `runOnce` 增加预热采集轮（产出丢弃，只为喂进上一份样本），间隔 `onceWarmupGap=2s` 后跑正式轮；net/disk 速率类同样受益 |
 | 验收 | ① 真机 `--once` 退出码 0 且成功上报（`server_ts=1790844501013`，2815B→1179B）；② 本地 `go vet`/`go test`/Linux 交叉编译全绿 —— 均已达成 |
-| 备注 | ⚠️ `90e81e8` 因开发机会话无 GitHub 凭证**尚未推送**，待 Owner 在常用终端 `git push`；资产机以补丁文件方式先应用了该改动 |
+| 备注 | ⚠️ `90e81e8` **尚未推送**，待 Owner 执行 `git push`；资产机以补丁文件方式先应用了该改动 |
 
-### A-T27　提交 `server/package-lock.json` ⬜
+### A-T27　提交 `server/package-lock.json` ✅（`6b469ad`）；`npm ci` 统一化仍待办
 
 | 项 | 内容 |
 |---|---|
-| 问题 | `server/package-lock.json` 在本地一直是**未跟踪**状态、从未入库；A-T09 克隆部署时 `npm ci` 直接失败（无锁文件可用），只能退回 `npm install`（依赖版本不受锁约束） |
+| 问题 | ~~`server/package-lock.json` 在本地一直是**未跟踪**状态、从未入库；A-T09 克隆部署时 `npm ci` 直接失败（无锁文件可用），只能退回 `npm install`（依赖版本不受锁约束）~~ 该文件已入库并提交 |
 | 依据 | A-T09 部署实测；README §3 的 `npm install` 流程无法保证可复现 |
-| 验收 | ① `git add server/package-lock.json` 并提交推送；② 部署文档/脚本统一用 `npm ci`（有锁走 ci）；③ `npm ci --omit=dev` 在干净克隆上通过 |
+| 验收 | ① ~~`git add server/package-lock.json` 并提交推送~~ ✅；② 部署文档/脚本统一用 `npm ci`（有锁走 ci）⬜；③ `npm ci --omit=dev` 在干净克隆上通过 ⬜ |
 | 级别 | P1（可复现构建） |
+
+**完成记录（`6b469ad`）**：`server/package-lock.json` 已入库并随 `origin/main` 推送（`git ls-files` 可见；
+`git log --diff-filter=A -- server/package-lock.json` = `6b469ad`），验收 ① 达成。
+② / ③ 仍待办：`README.md:108` 与 `server/README.md:56` 仍写 `npm install`，
+`npm ci` 统一化与干净克隆验证未做（涉及未分配文件，本次未改）。
+
+### A-T28　修 `TestHTTPProbeHTTPSUsesRealCertVerification` 并行偶发超时 ⬜
+
+| 项 | 内容 |
+|---|---|
+| 问题 | `agent/internal/prober/http_test.go:491-515` 的 HTTPS 自签证书用例，在**并行整包**（`go test ./...`）运行时偶发失败：错误不是证书校验失败，而是 `抓取 https://127.0.0.1:8295 失败：超时（context deadline exceeded）` —— TLS 握手未在探活超时内完成，走了超时分支。`go test -p 1 ./...` 串行与 `-run` 单跑均稳定通过（实测 `-count=3` 3/3 绿） |
+| 定性 | **测试稳定性问题，非实现缺陷**：本探活确实未跳过证书校验，串行运行时断言成立（`http_test.go:505-511`）；`collector` 测试落地后整包并行负载上升，加大了该用例的耗时抖动 |
+| 依据 | `docs/agent-status.md` §5.0.2 复测记录、§8 R-07 |
+| 涉及文件 | `agent/internal/prober/http_test.go`（或其探活超时配置） |
+| 验收 | ① 让该用例不再受并行负载影响（如放宽/注入超时、把握手与断言解耦，或标记不与重负载用例并行）；② ⛔ 不得删除「自签证书必须校验失败」的核心断言；③ `go test ./... -count=1` 连续多轮不再偶发红 |
+| 级别 | P2（验证可靠性） |
 
 ---
 
@@ -334,10 +356,11 @@ E2E 3/3 PASS（WrongSecret / RealCenter / IdempotentReplay）；`--once` 上报 
 
 第 2 轮（口径与可追溯）✅ 2026-10-01 完成（ab83d7f）
   A-T04 README 状态口径 → A-T05 docs/agent.md §2 → A-T24 索引（可并入 A-T04 的提交）
-  ※ A-T25 为本轮新登记，建议与 A-T06 一并做
+  ※ A-T25 为本轮新登记，建议与 A-T06 一并做（A-T06 已完成，A-T25 仍待办）
 
-第 3 轮（把「未验证」变成「已验证」）⬜ 下一步
-  A-T06 collector 测试（夹具现成，性价比最高）→ A-T07 scheduler 测试 → A-T09 Linux 真机 E2E 留痕
+第 3 轮（把「未验证」变成「已验证」）🟡 部分完成
+  A-T06 collector 测试 ✅（`418b454`，7 文件 / 35 用例）→ 下一步 A-T07 scheduler 测试 → A-T08 logging/ulid/cmd 测试
+  A-T09 Linux 真机 E2E ✅（2026-10-01，见 A-T09 完成记录）
 
 第 4 轮（M2 上线能力）⬜
   A-T11 systemd unit → A-T10 vantage.sh → A-T12 三种 key 形式 → A-T13 运维文档
@@ -346,7 +369,7 @@ E2E 3/3 PASS（WrongSecret / RealCenter / IdempotentReplay）；`--once` 上报 
 ```
 
 **判定「Agent 可以上线」的最小集合**：A-T01 ✅ + A-T03 ✅ + A-T09 ✅ + A-T10/T11/T12/T13 ✅。
-**判定「M1–M4 全部收口」还需**：A-T06 / A-T07 ✅ + A-T14～A-T16 定型。
+**判定「M1–M4 全部收口」还需**：A-T07 ✅ + A-T14～A-T16 定型（A-T06 已 ✅）。
 
 ---
 
@@ -357,4 +380,5 @@ E2E 3/3 PASS（WrongSecret / RealCenter / IdempotentReplay）；`--once` 上报 
 | 2026-09-28 | 首次建立待办清单：A-T01…A-T24，来源为 `docs/agent-status.md` §6/§7/§8 的偏差、未实现项与风险 |
 | 2026-10-01 | P0/P1 完成：A-T01/A-T02/A-T03/A-T04/A-T05/A-T23/A-T24 置 ✅（提交 `1c6dd9a` + `ab83d7f`）；`go vet` / `go test ./...` 首次全绿；新增 A-T25（§3 数据源列 gopsutil 口径收窄）；第 1/2 轮执行顺序标注完成情况。改动细节见 [`docs/agent-changes-2026-10-01.md`](agent-changes-2026-10-01.md) |
 | 2026-10-01(晚) | **A-T09 真机 E2E ✅**（Debian 12 经堡垒机：3/3 PASS + `--once` 真实上报落库，PG 18.4 兼容实测，红线检查通过）；登记并完成 A-T26（`--once` 预热轮修复，`90e81e8`，⚠️ 待推送）；登记 A-T27（package-lock.json 未入库）。上线最小集合仅剩部署侧 A-T10～T13 |
-| 2026-10-05 | **A-T10/A-T11/A-T12 代码落地（🟡 待真机验证）**：设计文档 `docs/agent-install-script.md` 定稿（含 Q1–Q12 决策台账）→ `agent/deploy/` 交付 `vantage.sh`（POSIX sh，子命令齐、源链回退、验签+sha256、凭证三形式、冒烟上报前移、首次安装回滚、接管旧机）+ `vantage-agent.service` + `config.minimal.yaml` + `tests/static-assert.sh` + `tests/shell-lint.js`（本机等价校验，带自测）+ `build-release.sh`（含 `--keygen`）+ `publish-release.sh`（签名+三源+回读自检）+ `README.md`；`.gitignore` 增加私钥兜底。⚠️ 本机 MSYS `sh.exe` 被沙箱命名管道限制挡住，`sh -n`/静态断言与 11 条负例**待 Owner 在真机/容器执行**（设计 §12.2）；步 0（生成密钥对、打 tag、发三源）同样待 Owner；A-T13（运维文档）未开始 |
+| 2026-10-05 | **A-T10/A-T11/A-T12 代码落地（🟡 待真机验证）**：设计文档 `docs/agent-install-script.md` 定稿（含 Q1–Q12 决策台账）→ `agent/deploy/` 交付 `vantage.sh`（POSIX sh，子命令齐、源链回退、验签+sha256、凭证三形式、冒烟上报前移、首次安装回滚、接管旧机）+ `vantage-agent.service` + `config.minimal.yaml` + `tests/static-assert.sh` + `tests/shell-lint.js`（本机等价校验，带自测）+ `build-release.sh`（含 `--keygen`）+ `publish-release.sh`（签名+三源+回读自检）+ `README.md`；`.gitignore` 增加私钥兜底。`sh -n`/静态断言与 11 条负例**待 Owner 在真机/容器执行**（设计 §12.2）；步 0（生成密钥对、打 tag、发三源）同样待 Owner；A-T13（运维文档）未开始 |
+| 2026-10-05 | **A-T06 collector 单元测试 ✅**（`418b454`）：7 个 `_test.go` / 35 条用例；A-T27 ① 达成（`server/package-lock.json` 已入库，`6b469ad`），② ③ `npm ci` 统一化仍待办；新增 A-T28（prober HTTPS 证书用例并行偶发超时，测试稳定性） |

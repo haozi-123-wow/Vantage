@@ -116,8 +116,28 @@ Windows 上跑测试会看到 2 处 `SKIP` 与 ICMP 降级 WARN，均为预期�
 
 | 项 | 状态 |
 |---|---|
-| A-T06 / A-T07 / A-T08（collector / scheduler / logging+ulid+cmd 测试） | ⬜ 未开始（本轮进行到读取源码阶段即转入文档交付） |
-| A-T09（Linux 真机 E2E 留痕） | ⬜ 本机为 Windows，无法执行 |
-| A-T10～A-T13（vantage.sh / systemd / key 三形式 / 运维文档） | ⬜ 未开始 |
+| A-T06（collector 测试） | ✅ 已落地（`418b454`，7 个 `_test.go` / 35 条用例）—— 本文件成稿时尚未开始，见下方「后续轮次补充」 |
+| A-T07 / A-T08（scheduler / logging+ulid+cmd 测试） | ⬜ 未开始（本轮进行到读取源码阶段即转入文档交付） |
+| A-T09（Linux 真机 E2E 留痕） | ✅ 已完成（2026-10-01 晚，见 `docs/agent-status.md` §5.0.1）；本文件成稿时本机为 Windows、尚未执行 |
+| A-T10～A-T13（vantage.sh / systemd / key 三形式 / 运维文档） | 🟡 A-T10/A-T11/A-T12 代码已落地、待真机验证；A-T13 未开始（见 `docs/agent-todo.md` §4） |
 | A-T14～A-T16（契约收窄） | ⛔ 需先改契约与 Owner 拍板，不在本轮 |
 | A-T25（`docs/agent.md` §3 数据源列 gopsutil → /proc 现实口径收窄） | ⬜ 本轮新登记 |
+| A-T26 / A-T27 | A-T26 ✅（`90e81e8`）；A-T27 ① ✅（`6b469ad`）② ③ 待办 |
+| A-T28（prober HTTPS 证书用例并行偶发超时） | ⬜ 2026-10-05 复测新登记（测试稳定性，非实现缺陷） |
+
+## 7. 后续轮次补充（成稿之后，截至 2026-10-05）
+
+本文件记录的 `1c6dd9a` / `ab83d7f` 一轮之后，仓库继续推进，与本文件**结论直接相关**的变化如下
+（细节以 [`docs/agent-status.md`](agent-status.md) §5.0.1/§5.0.2/§9 与
+[`docs/agent-todo.md`](agent-todo.md) 各条完成记录为准）：
+
+| 项 | 变化 |
+|---|---|
+| A-T06 | ✅ collector 单元测试落地（`418b454`）：7 个 `_test.go` / 35 条用例，消费 `testdata/proc/**` 全部 21 个夹具，速率类注入假时钟，覆盖降级与过滤规则；顺带修复测试暴露的 disk 延迟与进程契约缺陷。**§6 表中原写「⬜ 未开始」，已更正** |
+| A-T09 | ✅ 真机 E2E 完成（2026-10-01 晚）：3/3 PASS + `--once` 真实上报落库；**§6 表中原写「本机为 Windows，无法执行」，已更正** |
+| A-T10～T12 | 🟡 `agent/deploy/` 交付安装脚本 / systemd unit / config 模板 / 打包与发布脚本；`sh -n` 与 11 条负例待 Owner 在真机/容器执行 |
+| A-T26 / A-T27 | A-T26 ✅（`--once` 预热轮，`90e81e8`）；A-T27 ① `server/package-lock.json` 已入库（`6b469ad`），`npm ci` 统一化待办 |
+| 仓库代码清点 | 由本轮成稿时的 38 个 `.go` / 测试 3306 行，变为 **48 个 `.go`（16 个测试文件）/ 非测试 6775 行 / 测试 4456 行** |
+| 新登记 | A-T28：`internal/prober` 的 HTTPS 自签证书用例在并行整包运行时偶发超时失败（`-p 1` 串行全绿），属测试稳定性问题 |
+
+⚠️ 本文件标题与正文（§1–§5）记录的仍是 2026-10-01 那一轮的两个提交，未追溯修改；后续变化集中在本节与 §6 的状态更正。

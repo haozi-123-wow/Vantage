@@ -226,7 +226,7 @@ test('✅ R8：规则的基名/全名两种引用语义', () => {
 //
 // docs/database.md §5.7.2 要求「两端各提供 buildMetric/parseMetric，必须同源实现 + 共用测试向量」。
 // 单侧自测证明不了「两端拼法一致」——只有共用向量能证明。
-// 文件放在仓库根的 contracts/，⛔ 不是 server/test/（本仓库不上传测试目录，见 contracts/README.md）。
+// 文件放在仓库根的 contracts/：它是**接口定义**而不是测试代码，两端测试读同一份（见 contracts/README.md）。
 // ---------------------------------------------------------------------------
 
 const SHARED_VECTORS = JSON.parse(

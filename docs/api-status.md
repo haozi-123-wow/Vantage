@@ -34,13 +34,13 @@
 | 告警 / 通道 / 静默 / 设置 / 用户 / 审计查询 | ⏳ 未实现（M3） | `api.md` §4.5–§4.10 |
 | WebSocket（`/ws/public` · `/ws/live`） | ✅ 已落地（2026-10-05；消息格式与频道集合已定稿） | `api.md` §5；决策见本文件 §4.9 |
 
-**当前可用端点数 = 29**：3 个探针 + 2 个 Agent 上报端点 + 13 个认证会话端点 + 4 个公开状态端点 + 6 个私有状态端点 + 1 个 Agent 管理端点（`api.md` §4.1/§3.2/§4.2/§4.4）。
+**当前可用端点数 = 30**：3 个探针 + 2 个 Agent 上报端点 + 13 个认证会话端点 + 4 个公开状态端点 + 7 个私有状态端点 + 1 个 Agent 管理端点（`api.md` §4.1/§3.2/§4.2/§4.3/§4.4）。
 **另有 2 个 WebSocket 频道**（`/ws/public`、`/ws/live`，✅ 2026-10-05 落地，`api.md` §5），不计入上面的 REST 端点数。
 **未实现端点当前调用会命中 404 `not_found`**（路由未注册 → §1.3 统一错误信封）。
 
 ---
 
-## 2. 验收待办（**由 Owner 执行**，agent 不在本机跑目标环境）
+## 2. 验收待办（**由 Owner 执行**）
 
 | # | 动作 | 期望 |
 |---|---|---|
@@ -53,10 +53,10 @@
 | 7 | `security.require_2fa=true` 下用未绑定账号登录 | 被引导到强制绑定页并完成绑定 |
 | 8 | 极验真机：首次登录不出现按钮 → 故意输错密码 → 出现官方按钮 → 通过后自动重提 | `docs/geetest-captcha.md` §10.2 的人测部分 |
 | 9 | （可选）`node server/scripts/create-user.js --reset-2fa <username>` | 被锁用户可重新登录 |
-| 10 | `cd server && npm test` | 新增三组全绿：`test/status.service.test.js`（28）、`test/public.api.test.js`（12）、`test/hosts.api.test.js`（11） |
+| 10 | `cd server && npm test` | 新增三组全绿：`test/status.service.test.js`（31）、`test/public.api.test.js`（17）、`test/hosts.api.test.js`（11） |
 | 11 | `curl -s localhost:8787/api/public/hosts \| jq` | 200，`{items, next_cursor:null, updated_at}`；每项有 `slug`、⛔ **无 `id`**、⛔ 无 IP 字段；无数据时 `snapshot.*` 为 `null`（不是 0） |
 | 12 | `curl -s localhost:8787/api/public/summary \| jq` | `total = online + offline + disabled`；`alerts` 三个 0 |
-| 13 | `PATCH /api/v1/settings {"public_view.enabled": false}` 后重放 #11（≤30s 生效） | **404** `not_found`（⛔ 不是 403、不是空 body）；改回 true → 立刻 200 |
+| 13 | `PATCH /api/v1/settings {"public_view.enabled": false}` 后重放 #11（≤30s 生效）（⚠️ 该端点属 M3、尚未实现，见 §1；本条的开关切换需绕开它） | **404** `not_found`（⛔ 不是 403、不是空 body）；改回 true → 立刻 200 |
 | 14 | 反复请求 `/api/public/hosts` 61 次（`RATELIMIT_PUBLIC_PER_MINUTE=60`） | 第 61 次 429 `rate_limited` + `Retry-After`；响应头有 `X-RateLimit-*` |
 | 15 | 登录后 `curl -b cookie 'localhost:8787/api/v1/hosts?status=online&tag=prod&limit=5'` | 200；含 `last_ip` / `reported_ip` / `clock_drift_ms` / `ip_flapping` / `active_alerts`；`next_cursor` 为 null |
 | 16 | 停掉某台 Agent，等待 **90s（阈值）+ 最多 60s（扫描周期）= 最坏 150s** | 该机在 `/api/public/hosts` 变 `offline`；其 `snapshot` 在 **5 分钟后**变全 `null`（⛔ 不是 0） |
@@ -257,7 +257,7 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 | 判定服务 | `server/src/services/offline.service.js` | `offlineThresholdS(config)` = **30s × `OFFLINE_CYCLES_MULTIPLIER`（默认 3）= 90s**；`markStaleAgentsOffline()` |
 | 定时任务 | `cron.service.js` 的 `CRON_TASKS.offlineSweep` | 每 `HEARTBEAT_SWEEP_INTERVAL_S`（默认 **60s**）跑一次；复用既有 cron 分布式锁 |
 | 实时扇出 | `cron.service.js::publishOfflineDeltas()` | 与上报路径**同频道**（`live:metrics`）**同形状**（§5.2 的 `delta{channel:"status"}`），M3 的 WS 层原样转发、不翻译 |
-| 测试 | `test/offline.service.test.js`（17 例） | 阈值/边界、`disabled` 永不参与、`last_seen_at IS NULL`、未来时间戳、幂等防抖、恢复后再判、扇出形状、扇出失败不影响判定 |
+| 测试 | `test/offline.service.test.js`（19 例） | 阈值/边界、`disabled` 永不参与、`last_seen_at IS NULL`、未来时间戳、幂等防抖、恢复后再判、扇出形状、扇出失败不影响判定 |
 
 **两条关键实现选择**（结果与设计 §5.3 / `database.md` §8.2 一致，但落点不同）
 
@@ -393,7 +393,7 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 1. **列表字段与"吊销"语义**：契约写 `status: active|disabled|revoked`，而 `agents.status` 是**连接状态**（`online/offline/disabled`，✅ R18），库里**没有 `revoked`、也没有 `revoked_at`** ⇒ 要么加一次迁移拆成"连接状态 + 凭证状态"，要么改契约把"吊销"并入 `disabled`（建议前者，理由见 §4.6 的 A 条讨论）。
 2. **列表字段缺 `id`**（还有 `name`/`display_name`/`tags`/`public_slug`/`created_at`/`disabled_at`）：前端拿不到 `id` 就没法调 PATCH / rotate / disable / revoke。
 
-**⚠️ 外部依赖**：`install_hint` 指向的 `vantage.sh` **尚未落地**（仓库无任何 `.sh`，见 `docs/agent-status.md`）——接口已就绪，但那条一键命令要等脚本 + `AGENT_INSTALL_SCRIPT_URL` 配好才真正可用；在此之前管理员按响应里的 key/secret 手工写 `config.yaml` + 两个 0600 文件即可。
+**⚠️ 外部依赖**：`install_hint` 指向的 `vantage.sh` **已落地**（`agent/deploy/vantage.sh`，2026-10-05；见 `docs/agent-status.md`）——但脚本里的自建站 / 镜像地址与发布公钥仍是占位符（`<自建站>` / `<PLACEHOLDER-PUBKEY>`），所以那条一键命令要等发布产物 + `AGENT_INSTALL_SCRIPT_URL` 配好才真正可用；在此之前管理员按响应里的 key/secret 手工写 `config.yaml` + 两个 0600 文件即可。
 
 ---
 
@@ -502,7 +502,7 @@ node scripts/create-user.js --reset-2fa <username>                          # �
 | 2026-10-05 | **历史曲线接口落地**（`GET /api/v1/hosts/{id}/metrics`，M2 收尾）：新增 `services/metricQuery.service.js`、`metric.repo.js` 的 `METRIC_STEPS` + 两个只读查询、`routes/hosts.js` 的 `GET /hosts/:id/metrics`；新增错误码 `too_many_series`；`api.md` §4.3 的 ❓ 全部定稿。**关键口径**：档位 `30s`/`1m`/`5m`（**删掉 `15s`** —— 上报周期是 30s）、最长 **30 天**且不做跨表再聚合、`step=auto` = "选最细的档使点数 ≤2000"（恰好复现 5 个预设按钮）、两道闸门（展开后 ≤20 条序列、总数 ≤5 万点）超限 400 **不截断**、缺失桶不补 0、`from`/`to` 向外对齐到桶边界后回显。决议 G1–G10 见 §4.8。⚠️ 记一条实现坑：**`metrics` 不能用 `split(',')` 切分**（全名的维度分隔符就是逗号），只能按花括号外的逗号切，已留回归用例 |
 | 2026-10-04 | **添加 Agent 接口落地**（`POST /api/v1/agents`）：新增 `routes/agents.js`、`services/agentAdmin.service.js`、`agent.repo.js::insertAgent()`；新增 env `AGENT_INSTALL_SCRIPT_URL`（未配置则不给安装命令，⛔ 不给占位符假命令）；`install_hint` 由契约初稿的 `string` **改为对象**（三段命令 + 风险提示 + warnings）；一键命令补上 `VANTAGE_SECRET`（原 `agent.md` §12.1 漏写，已同步）；新增审计动作 `agent.create`；决议 F1–F9 与两处待定稿见 §4.7；前端 `agentsApi.create()` 与类型已就位（`vue-tsc` 通过）。⚠️ 记一条测试坑：PGlite 适配器必须给 `pool.connect()`（上报落库走 `withTransaction`），且清理顺序要按外键（`agent_ip_history` 等 RESTRICT） |
 | 2026-10-04 | **状态类接口收尾（第二批）**：新增 `GET /api/v1/summary`（契约新增）、`/api/v1/hosts/{id}`、`/{id}/probes`、`/{id}/ip-history`、`/{id}/processes`、`GET /api/public/hosts/{slug}/now`、`GET /api/public/probes`；新增 `utils/time.js`、`utils/ip.js::isPrivateAddress()`、两个公开缓存子键（`database.md` §7 已登记）；决议 E1–E10 见 §4.6.1；`api.md` §3.2/§4.2 全部改为 ✅ 并写死契约（清理了三处旧草案形状）；前端类型声明同步（`vue-tsc` 通过）。⚠️ 记一条教训：**fast-json-stringify 对任意键对象默认序列化成 `{}`**，透传 JSONB 必须写 `additionalProperties: true` |
-| 2026-10-04 | **服务器状态接口落地（第一批）**：`/api/public/hosts`、`/api/public/summary`、`/api/v1/hosts`：新增 `status.service.js`（唯一推导）、`routes/public.js`、`routes/hosts.js`、`middleware/publicView.js`、`createPublicRateLimiter()`；新增 env `PUBLIC_CACHE_TTL_S`（默认 10s）与两个 Redis 键（`snapshot:public:hosts|summary`，已登记 `database.md` §7）；D2-a/D3-a/D4-a/D8-a 与 D-名/D-禁/D-键/D-限流/D-tag/D-范围 全部按方案建议落地 → 新增 §4.6，`api.md` §3.2/§4.2 状态改为 ✅，前端类型声明（`web/src/api/public.ts`、`private.ts`、`types/domain.ts`）同步修正为 `{items, next_cursor}` |
+| 2026-10-04 | **服务器状态接口落地（第一批）**：`/api/public/hosts`、`/api/public/summary`、`/api/v1/hosts`：新增 `status.service.js`（唯一推导）、`routes/public.js`、`routes/hosts.js`、`middleware/publicView.js`、`createPublicRateLimiter()`；新增 env `PUBLIC_CACHE_TTL_S`（默认 10s）与两个 Redis 键（`snapshot:public:hosts`、`snapshot:public:summary`，已登记 `database.md` §7）；D2-a/D3-a/D4-a/D8-a 与 D-名/D-禁/D-键/D-限流/D-tag/D-范围 全部按方案建议落地 → 新增 §4.6，`api.md` §3.2/§4.2 状态改为 ✅，前端类型声明（`web/src/api/public.ts`、`private.ts`、`types/domain.ts`）同步修正为 `{items, next_cursor}` |
 | 2026-10-04 | 决议：离线参数的「数据库可配」（阈值倍数 / 扫描周期 / 按机阈值）**推迟到 M3 告警引擎一起做**，本期保持 env + 硬编码不变；M3 输入清单见 `docs/server-status-api.md` §11.1 |
 | 2026-10-04 | ⚠️ **校正离线判定的基准（重要）**：Agent 的 `report.interval` 默认值实为 **30s**（`agent/internal/config/config.go` 修订 G3：15s→30s），而实现与多处文档仍按旧文档的 15s ⇒ 阈值 45s **小于**上报周期 ⇒ **正常上报的机器也会在两次上报之间被判离线**（假离线）。已改为 30s 基准、阈值 **90s**、扫描周期默认 **60s**；新增回归防线（扫描周期必须 < 阈值、按 30s 节奏上报的任何相位都不得判离线）；同步校正 `docs/agent.md` G3 / `docs/database.md` §8.2 / `docs/api.md` §3.2 |
 | 2026-10-04 | **离线判定落地**（`services/offline.service.js` + `CRON_TASKS.offlineSweep`，单语句 UPDATE 防抖、扇出 `status:offline` delta）→ 新增 §4.4，`database.md` §8.2 同步；服务器状态接口方案见 `docs/server-status-api.md` |
